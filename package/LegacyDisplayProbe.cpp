@@ -282,6 +282,23 @@ static void frameClockReport(const char *name,FrameClock &c,uint32_t beat) {
     const uint64_t span=c.t[(n-1)%1024]-c.t[first%1024];
     printf("evb10: display t+%us: %s: %u frames since the last report, busiest second %u, gap shortest %llu us, mean %llu us, longest %llu us\n",beat*5,name,count,best,
         (unsigned long long)(shortest*1000000/frequency),(unsigned long long)(span*1000000/frequency/(count-1)),(unsigned long long)(longest*1000000/frequency));
+    // Every gap of a moving window, in units of 100 us, 40 to a line (gap i lies between frames i-1 and i), after the first frame's time on the uptime clock
+    // (microseconds, the clock of the Metal plugin's timeline): the shape of the hitches, which a mean and a longest gap do not show, and where they fall
+    // among the command buffers. Quiet windows (a static screen) print nothing.
+    if(count>=8) {
+        uint64_t raw=0;__asm__ volatile("mrs %0, cntvct_el0":"=r"(raw));
+        const uint64_t firstUs=probeNowUs()-(raw-c.t[first%1024])*1000000/frequency;
+        const char kind=(&c==&shownClock)?'S':'W';
+        char line[220];
+        for(uint32_t i=1;i<count;i+=40) {
+            int at=snprintf(line,sizeof line,"evb10: display gaps t+%us %c first=%llu from=%u:",beat*5,kind,(unsigned long long)firstUs,i);
+            for(uint32_t k=i;k<count && k<i+40 && at>0 && (size_t)at+8<sizeof line;++k) {
+                const uint64_t gap=c.t[(first+k)%1024]-c.t[(first+k-1)%1024];
+                at+=snprintf(line+at,sizeof line-at," %llu",(unsigned long long)(gap*10000/frequency));
+            }
+            printf("%s\n",line);
+        }
+    }
 }
 void native_legacy_swap_validation_observed(bool accepted,unsigned reason,const void *request,const void *surface) {
     if(accepted)native_legacy_swap_stage(0);
