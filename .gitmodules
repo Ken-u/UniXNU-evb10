@@ -1,0 +1,6 @@
+[submodule "package/Mali"]
+	path = package/Mali
+	url = https://github.com/Ken-u/Mali.git
+[submodule "package/Rk3588Emmc"]
+	path = package/Rk3588Emmc
+	url = https://github.com/Ken-u/Rk3588Emmc.git
