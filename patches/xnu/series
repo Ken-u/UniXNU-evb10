@@ -1,0 +1,12 @@
+# Board patches of the EVB10, applied after the ARM64, SoC and OS series. Generated parts come from
+# patches/tools/make-patches.py.
+# Why a process went away (evb10-ps=N)
+evb10-exit-trace.patch
+# mmap(PROT_EXEC) of the owner's directory of programs and libraries
+evb10-mmap-grant.patch
+# User-stack frame-pointer chain of the threads of named processes (evb10-bt*)
+evb10-thread-sample.patch
+# Userland hook: Data volume, SystemOS union mount, owner test program, GPU add-on
+evb10-userland-mounts.patch
+# Mirror of the console on the frame buffer (vc_mirror=1) and -v text mode
+evb10-vc-mirror.patch

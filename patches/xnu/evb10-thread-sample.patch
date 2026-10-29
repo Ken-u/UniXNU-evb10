@@ -1,0 +1,667 @@
+--- a/osfmk/kern/bsd_kern.c
++++ b/osfmk/kern/bsd_kern.c
+@@ -1526,3 +1526,664 @@
+ 		return KERN_FAILURE;
+ 	}
+ }
++
++#if DEVELOPMENT || DEBUG
++/*
++ * EVB10: where the threads of a task are (evb10-ps=N, patches/tools/evb10-userland-mounts.c.inc).
++ *
++ * A launchd that has made 20 system calls in 200 seconds and still burns 57 % of a CPU in the kernel
++ * (xnu-probe/runs/emmc5f) cannot be explained by its counters. This says what each thread is doing:
++ * its scheduling state, what it waits for, the registers it returns to in user mode (the last trap
++ * from user mode: the PC of the system call, the fault address of the abort), and the kernel frames
++ * it is switched out in. It only reads. A thread that runs on another CPU right now has the kernel
++ * stack of its LAST switch-out (its state says so: TH_RUN without TH_WAIT), which still tells where
++ * it keeps coming back to.
++ *
++ * Lives in bsd_kern.c because struct thread, struct task and the per-CPU data are private to osfmk.
++ */
++#if defined(__arm64__)
++#include <arm/cpu_data_internal.h>
++#endif
++#include <vm/vm_shared_region.h>
++extern int printf(const char *, ...) __attribute__((format(printf, 1, 2)));
++extern int machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nframes, uint32_t *thread_trace_flags);
++extern struct arm_saved_state *get_user_regs(thread_t thread);
++extern int ml_get_max_cpu_number(void);
++
++#define EVB10_SAMPLE_FRAMES 14
++#define EVB10_SAMPLE_THREADS 8
++#define EVB10_UBT_THREADS 24
++#define EVB10_UBT_FRAMES 14
++
++extern char *proc_name_address(void *p);
++extern int evb10_shared_region(task_t task, uint64_t out[3]);
++#include <pexpert/pexpert.h>
++
++/*
++ * evb10-bt=<process name> (and evb10-bt2/3/4): at every table (sample 0) print, for each thread of that process, the frame-pointer chain of its
++ * USER stack: where backboardd (or whoever) sits when it has stopped making progress. The addresses are shared cache addresses
++ * after this boot's slide (xnu-probe/symbolize/README.md: dsc.py sym --slide); the second line says the slide.
++ * vm_map_read_user switches to the target's map for the copyin, so a thread of another process is read the same way.
++ */
++#define EVB10_UBT_NAMES 4
++static int evb10_bt_state; /* 0 not read yet, 1 none, 2 at least one name */
++static char evb10_bt_names[EVB10_UBT_NAMES][17];
++
++static const char *
++evb10_bt_wanted(task_t task)
++{
++	void *bsd;
++	int i;
++
++	if (evb10_bt_state == 0) {
++		static const char *const keys[EVB10_UBT_NAMES] = {"evb10-bt", "evb10-bt2", "evb10-bt3", "evb10-bt4"};
++
++		evb10_bt_state = 1;
++		for (i = 0; i < EVB10_UBT_NAMES; i++) {
++			if (PE_parse_boot_argn(keys[i], evb10_bt_names[i], sizeof(evb10_bt_names[i]))) {
++				evb10_bt_state = 2;
++			}
++		}
++	}
++	if (evb10_bt_state != 2) {
++		return NULL;
++	}
++	bsd = get_bsdtask_info(task);
++	if (bsd == NULL) {
++		return NULL;
++	}
++	for (i = 0; i < EVB10_UBT_NAMES; i++) {
++		if (evb10_bt_names[i][0] != 0 && strncmp(proc_name_address(bsd), evb10_bt_names[i], 16) == 0) {
++			return evb10_bt_names[i];
++		}
++	}
++	return NULL;
++}
++
++static void
++evb10_user_chain(task_t task, thread_t thread, struct arm_saved_state *user)
++{
++	uint64_t fp = get_saved_state_fp(user), chain[EVB10_UBT_FRAMES];
++	int n = 0, i;
++
++	while (n < EVB10_UBT_FRAMES && fp != 0 && (fp & 7) == 0) {
++		uint64_t frame[2];
++
++		if (vm_map_read_user(task->map, (vm_map_offset_t)fp, frame, sizeof(frame)) != KERN_SUCCESS) {
++			break;
++		}
++		chain[n++] = frame[1];
++		if (frame[0] <= fp) {
++			break;
++		}
++		fp = frame[0];
++	}
++	printf("evb10: ubt tid %#llx pc %#llx lr %#llx sp %#llx fp %#llx | up", thread->thread_id,
++	    (unsigned long long)get_saved_state_pc(user), (unsigned long long)get_saved_state_lr(user),
++	    (unsigned long long)get_saved_state_sp(user), (unsigned long long)get_saved_state_fp(user));
++	for (i = 0; i < n; i++) {
++		printf(" %#llx", chain[i]);
++	}
++	printf("\n");
++}
++
++void evb10_task_threads_dump(task_t task, int sample);
++void evb10_cpu_stats_dump(void);
++
++static boolean_t
++evb10_kbt_wanted(void)
++{
++	static int kbt = -1;
++
++	if (kbt < 0) {
++		uint32_t v = 0;
++
++		(void) PE_parse_boot_argn("evb10-kbt", &v, sizeof(v));
++		kbt = v ? 1 : 0;
++	}
++	return kbt == 1;
++}
++
++void
++evb10_task_threads_dump(task_t task, int sample)
++{
++	thread_t thread;
++	int shown = 0;
++	boolean_t want_bt = FALSE;
++	int limit = EVB10_SAMPLE_THREADS;
++	uint64_t cache[3] = {0, 0, 0};
++	const char *bt_name;
++
++	if (task == TASK_NULL) {
++		return;
++	}
++	if (sample == 0 && (bt_name = evb10_bt_wanted(task)) != NULL) {
++		want_bt = TRUE;
++		limit = EVB10_UBT_THREADS;
++		if (evb10_shared_region(task, cache) == 0) {
++			printf("evb10: ubt %s: cache base %#llx first %#llx slide %#llx\n", bt_name, (unsigned long long)cache[0],
++			    (unsigned long long)cache[1], (unsigned long long)cache[2]);
++		}
++	}
++	task_lock(task);
++	queue_iterate(&task->threads, thread, thread_t, task_threads) {
++		uint64_t frames[EVB10_SAMPLE_FRAMES] = {0};
++		uint32_t flags = 0;
++		int count, i;
++		uint64_t pc = 0, lr = 0, sp = 0, x0 = 0, x1 = 0, x16 = 0, far = 0;
++		uint32_t esr = 0;
++		struct arm_saved_state *user;
++
++		if (++shown > limit) {
++			break;
++		}
++		/*
++		 * A thread that blocked with a continuation has no kernel stack at all (machine_stack_detach
++		 * clears kstackptr), and machine_trace_thread64 walks it unchecked: the first MSUEarlyBootTask
++		 * that sat in such a wait took the whole kernel down with a data abort at 0x3f98
++		 * (xnu-probe/runs/emmc5i). Its continuation says where it will resume instead.
++		 */
++		count = 0;
++		/*
++		 * The check races with the thread blocking on a continuation (it detaches its stack at that moment, no lock of ours keeps it from
++		 * it): a process that is killed and started again every few seconds (a poster extension whose check-in times out) took the kernel
++		 * down with the same data abort at 0x3f98 (xnu-probe/runs/gpu52). So the kernel frames are opt-in, boot-arg evb10-kbt=1.
++		 */
++		if (evb10_kbt_wanted() && (thread == current_thread() || thread->machine.kstackptr != NULL)) {
++			count = machine_trace_thread64(thread, (char *)frames, (char *)(frames + EVB10_SAMPLE_FRAMES), EVB10_SAMPLE_FRAMES,
++			    &flags) / (int)sizeof(frames[0]);
++		}
++		user = get_user_regs(thread);
++		if (user != NULL) {
++			pc = get_saved_state_pc(user);
++			lr = get_saved_state_lr(user);
++			sp = get_saved_state_sp(user);
++			x0 = get_saved_state_reg(user, 0);
++			x1 = get_saved_state_reg(user, 1);
++			x16 = get_saved_state_reg(user, 16);
++			esr = get_saved_state_esr(user);
++			far = get_saved_state_far(user);
++		}
++		printf("evb10: thr %d tid %#llx st %#x pri %d/%d sw %u/%u cpu %d wait %d ev %#llx | user pc %#llx lr %#llx sp %#llx x0 %#llx "
++		    "x1 %#llx x16 %#llx esr %#x far %#llx | cont %#llx kern%s",
++		    sample, thread->thread_id, (unsigned)thread->state, (int)thread->sched_pri, (int)thread->base_pri,
++		    thread->c_switch, thread->p_switch, thread->last_processor ? thread->last_processor->cpu_id : -1,
++		    (int)thread->wait_result, (unsigned long long)thread->wait_event, pc, lr, sp, x0, x1, x16, esr, far,
++		    (unsigned long long)(uintptr_t)thread->continuation, flags ? "(trunc)" : "");
++		for (i = 0; i < count; i++) {
++			printf(" %#llx", frames[i]);
++		}
++		printf("\n");
++		if (want_bt && user != NULL) {
++			evb10_user_chain(task, thread, user);
++		}
++	}
++	task_unlock(task);
++}
++
++/*
++ * The registers a thread had at its last trap from user mode, for the crash-site dump of bsd
++ * (evb10_exit_trace): pc, lr, sp, fp, x0, x1, x2, x16, esr, far. 0 if the thread has user state.
++ */
++int evb10_user_context(thread_t thread, uint64_t out[10]);
++
++int
++evb10_user_context(thread_t thread, uint64_t out[10])
++{
++	struct arm_saved_state *user = get_user_regs(thread);
++
++	if (user == NULL) {
++		return -1;
++	}
++	out[0] = get_saved_state_pc(user);
++	out[1] = get_saved_state_lr(user);
++	out[2] = get_saved_state_sp(user);
++	out[3] = get_saved_state_fp(user);
++	out[4] = get_saved_state_reg(user, 0);
++	out[5] = get_saved_state_reg(user, 1);
++	out[6] = get_saved_state_reg(user, 2);
++	out[7] = get_saved_state_reg(user, 16);
++	out[8] = get_saved_state_esr(user);
++	out[9] = get_saved_state_far(user);
++	return 0;
++}
++
++/*
++ * Where the task's shared cache is: its base, the offset of the first mapping and the random slide of
++ * this boot (a cache address in a crash dump minus the slide is the address in the file, so the dump
++ * can be matched to the unslid cache). out[0] = base, out[1] = first mapping, out[2] = slide.
++ */
++int evb10_shared_region(task_t task, uint64_t out[3]);
++
++int
++evb10_shared_region(task_t task, uint64_t out[3])
++{
++	vm_shared_region_t sr = vm_shared_region_get(task);
++
++	if (sr == NULL) {
++		return -1;
++	}
++	out[0] = sr->sr_base_address;
++	out[1] = sr->sr_first_mapping;
++	out[2] = sr->sr_slide;
++	vm_shared_region_deallocate(sr);
++	return 0;
++}
++
++/*
++ * What every CPU has been doing since boot, in counts: a CPU that takes 60000 interrupts a second looks
++ * like a thread that is switched 60000 times a second. And which thread each CPU runs this very moment.
++ */
++/* ArmCpu's secondary-CPU evidence (sheng-smp=1): step 1 nub, 2 registered, 3 thread, 4 PSCI CPU_ON issued, 5 entered initCPU, 6 GIC ready, 7 running. */
++extern volatile uint32_t armcpu_smp_requested, armcpu_smp_running, armcpu_smp_conduit;
++extern volatile uint32_t armcpu_smp_step[8], armcpu_smp_fail[8], armcpu_core_timer[8], armcpu_core_sgi[8];
++extern volatile int32_t armcpu_smp_psci_rc[8];
++/* Reset-path breadcrumbs of the secondary cores, 8 u64 per core (osfmk/arm64/start.s, evb10-smp-el2.patch). */
++extern volatile uint64_t rk3588_smp_trace[];
++
++/* ArmCpu's IPI evidence and its read-only GIC probe (UniXNU/drivers/ArmCpu/ArmCpu.cpp). */
++extern volatile uint64_t armcpu_ipi_interrupts, armcpu_ipi_sent, armcpu_ipi_selftest_sent, armcpu_spi_unhandled;
++extern volatile uint32_t armcpu_gic_boot[8], armcpu_gic_diag_stage, armcpu_irq_phase, armcpu_irq_id, armcpu_gic_stride;
++extern volatile uint32_t armcpu_spi_unhandled_id;
++extern void armcpu_gic_diag(uint64_t aff, uint32_t *out);
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++static uint32_t
++evb10_gic_rd(volatile uint8_t *base, uint32_t off)
++{
++	return *(volatile uint32_t *)(base + off);
++}
++
++static void
++evb10_gic_wr(volatile uint8_t *base, uint32_t off, uint32_t value)
++{
++	*(volatile uint32_t *)(base + off) = value;
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++
++/*
++ * Inter-processor interrupts on the RK3588 (a GIC-600 behind BL31).
++ *
++ * History, because this was wrong for a while: emmc5r..emmc5v concluded "ICC_SGI1R_EL1 from non-secure EL1 generates nothing"
++ * and worked around it with SGI 0 made pending through the target's own redistributor frame (GICR_ISPENDR0, SGI frame + 0x200;
++ * armcpu-mmio-sgi=1, UniXNU-rk3588-common scripts/data/ArmCpu-rk3588-mmio-sgi.patch). None of the ICC_SGI1R_EL1 tests of that time ever
++ * executed the msr: "dsb ishst; msr icc_sgi1r_el1, %0; isb" is a lone "dsb ishst" for the Darwin assembler, where ';' starts a
++ * comment (see evb10-userland-mounts.c.inc), in this lab as in the stock ArmCpu::signalCPU. So until the msr is really there the
++ * measurement of "does the GIC-600 deliver ICC_SGI1R_EL1 SGIs" is open; this lab does it with the instruction present.
++ *
++ * Without working IPIs no core ever cleared SIGPdisabled by taking its first IPI, idle cores spun instead of waiting in WFI,
++ * and a panic or a stackshot could not stop the other cores. This checks the IPIs end to end, when every core is up and again
++ * ~70 s later, when the idle cores have been waiting in WFI:
++ *   A.  a raw SGI 0 to every other core through GICR_ISPENDR0 (the MMIO route): microseconds until that core's SGI counter moves;
++ *   A2. the same through ICC_SGI1R_EL1, written by this file's own asm (Aff1 = core number, TargetList 1, INTID 0);
++ *   A3. the same through armcpu_ipi_selftest(), i.e. the ICC_SGI1R_EL1 asm of the driver (UniXNU-rk3588-common scripts/data/ArmCpu-rk3588-sep-asm.patch);
++ *   B.  cpu_xcall() to every other core, the kernel's own path (cpu_signal -> PE_cpu_signal -> ArmCpu::signalCPU; MMIO or ICC
++ *       depending on armcpu-mmio-sgi): microseconds until the function ran on the target. A core the kernel still refuses
++ *       (SIGPdisabled: it never took an IPI) is reported as that, and a core that did not run its cross-call within the timeout
++ *       is not asked again (a second cross-call to a core that has not taken the first waits for it and panics after the ack timeout).
++ * GICR frames: the redistributor of core N is at 0xfe680000 + N * 0x20000, its SGI frame 0x10000 above that.
++ */
++#define EVB10_GICD_PHYS 0xfe600000UL
++#define EVB10_GICR_PHYS 0xfe680000UL
++#define EVB10_GICR_STRIDE 0x20000u
++#define EVB10_LAB_TIMEOUT_US 20000u
++#ifndef SIGPdisabled
++#define SIGPdisabled 0x80000000U
++#endif
++
++extern volatile uint32_t armcpu_core_sgi_sent[8];
++extern uint64_t mach_absolute_time(void);
++extern void absolutetime_to_nanoseconds(uint64_t abstime, uint64_t *result);
++extern void armcpu_ipi_selftest(uint64_t aff);
++
++/*
++ * One instruction per __asm__ statement, or "\n\t" between them: ';' is a comment for the Darwin assembler, so "isb; mrs %0, x"
++ * is just "isb" and leaves the output register unwritten (emmc5v's "counters that run at 997 MHz" were stale register contents).
++ */
++static inline uint64_t
++evb10_cntvct(void)
++{
++	uint64_t v;
++
++	__asm__ volatile ("isb\n\tmrs %0, cntvct_el0" : "=r" (v) :: "memory");
++	return v;
++}
++
++static inline uint64_t
++evb10_cntpct(void)
++{
++	uint64_t v;
++
++	__asm__ volatile ("isb\n\tmrs %0, cntpct_el0" : "=r" (v) :: "memory");
++	return v;
++}
++
++static inline void
++evb10_icc_sgi1r(uint64_t value)
++{
++	__asm__ volatile ("dsb ishst\n\tmsr icc_sgi1r_el1, %0\n\tisb" :: "r" (value) : "memory");
++}
++
++/* Ways to send SGI 0 to `core` for the lab; `sgi` is the target's redistributor SGI frame. */
++typedef void (*evb10_sgi_send_t)(int core, volatile uint8_t *sgi);
++
++static void
++evb10_lab_send_mmio(int core, volatile uint8_t *sgi)
++{
++	(void)core;
++	evb10_gic_wr(sgi, 0x200, 1);   /* GICR_ISPENDR0 bit 0 */
++}
++
++static void
++evb10_lab_send_icc(int core, volatile uint8_t *sgi)
++{
++	(void)sgi;
++	evb10_icc_sgi1r(((uint64_t)core << 16) | 1);   /* Aff1 = core, TargetList = Aff0 0, INTID 0 */
++}
++
++static void
++evb10_lab_send_driver(int core, volatile uint8_t *sgi)
++{
++	(void)sgi;
++	armcpu_ipi_selftest((uint64_t)core << 8);   /* the DT "reg" value of the core: its MPIDR Aff1 */
++}
++
++/*
++ * What the target core reports from inside the cross-call: when it ran (mach_absolute_time()), its CNTFRQ_EL0 (24 MHz on every core, A55
++ * and A76: emmc5t), MIDR_EL1, MPIDR_EL1, and the raw counters read at the same moment as the kernel's clock: CNTVCT_EL0 (what
++ * mach_absolute_time() is built on: ml_get_timebase() = CNTVCT_EL0 + the core's cpu_base_timebase) and CNTPCT_EL0. The difference of
++ * the two counters is the core's CNTVOFF_EL2, the difference of CNTVCT_EL0 and the kernel's clock is minus its base: if they differ
++ * from core to core, then a raw counter read in a thread that moves between cores (user space reads CNTVCT_EL0 directly) jumps.
++ */
++struct evb10_xcall_slot {
++	volatile uint64_t ran, freq, midr, mpidr, cntvct, cntpct, mach;
++};
++static struct evb10_xcall_slot evb10_xcall_slot[16];
++static bool evb10_xcall_stuck[16];
++
++static void
++evb10_xcall_probe(void *param)
++{
++	struct evb10_xcall_slot *slot = param;
++	uint64_t freq, midr, mpidr, vct, pct, mach;
++
++	__asm__ volatile ("mrs %0, cntfrq_el0" : "=r" (freq));
++	__asm__ volatile ("mrs %0, midr_el1" : "=r" (midr));
++	__asm__ volatile ("mrs %0, mpidr_el1" : "=r" (mpidr));
++	vct = evb10_cntvct();
++	pct = evb10_cntpct();
++	mach = mach_absolute_time();
++	slot->freq = freq;
++	slot->midr = midr;
++	slot->mpidr = mpidr;
++	slot->cntvct = vct;
++	slot->cntpct = pct;
++	slot->mach = mach;
++	slot->ran = mach;
++}
++
++/* Nanoseconds between two mach_absolute_time() readings. */
++static uint64_t
++evb10_lab_ns(uint64_t from, uint64_t to)
++{
++	uint64_t ns;
++
++	absolutetime_to_nanoseconds(to - from, &ns);
++	return ns;
++}
++
++/* Sends SGI 0 to every other core with `send`, one core at a time, and times how long that core's SGI counter takes to move. */
++static void
++evb10_lab_sgi_test(int round, const char *what, int max, volatile uint8_t *gicr, evb10_sgi_send_t send)
++{
++	for (int core = 0; core <= max; core++) {
++		volatile uint8_t *sgi = gicr + (uint32_t)core * EVB10_GICR_STRIDE + 0x10000;
++		uint32_t from, taken0, taken1;
++		uint64_t t0, t1 = 0;
++		bool seen = false;
++
++		disable_preemption();
++		from = current_processor()->cpu_id;
++		if ((int)from == core) {
++			enable_preemption();
++			continue;
++		}
++		taken0 = armcpu_core_sgi[core & 7];
++		t0 = mach_absolute_time();
++		send(core, sgi);
++		do {
++			t1 = mach_absolute_time();
++			if (armcpu_core_sgi[core & 7] != taken0) {
++				seen = true;
++				break;
++			}
++		} while (evb10_lab_ns(t0, t1) < EVB10_LAB_TIMEOUT_US * 1000ULL);
++		taken1 = armcpu_core_sgi[core & 7];
++		enable_preemption();
++		if (seen) {
++			printf("evb10: ipi lab %d: %s cpu %u -> core %d: taken %u -> %u after %llu ns\n", round, what, from, core, taken0, taken1,
++			    evb10_lab_ns(t0, t1));
++		} else {
++			printf("evb10: ipi lab %d: %s cpu %u -> core %d: NOT taken within %u us (taken %u, ispendr0 %#x)\n", round, what, from, core,
++			    EVB10_LAB_TIMEOUT_US, taken1, evb10_gic_rd(sgi, 0x200));
++		}
++	}
++}
++
++static void
++evb10_ipi_lab_round(int round, int max, volatile uint8_t *gicr)
++{
++	uint64_t vct, pct, mach, vct2;
++	uint32_t me;
++
++	/* This core's own raw counters against the kernel's clock (the others report theirs from the cross-call below). */
++	disable_preemption();
++	me = current_processor()->cpu_id;
++	vct = evb10_cntvct();
++	pct = evb10_cntpct();
++	mach = mach_absolute_time();
++	vct2 = evb10_cntvct();
++	enable_preemption();
++	printf("evb10: ipi lab %d: this core %u: cntvct %llu cntpct %llu mach %llu: cntpct - cntvct %lld, cntvct - mach %lld, cntvct twice in a row +%llu\n",
++	    round, me, vct, pct, mach, (long long)(pct - vct), (long long)(vct - mach), vct2 - vct);
++
++	/* A / A2 / A3. A raw SGI 0 to every other core: GICR_ISPENDR0 (MMIO), ICC_SGI1R_EL1 (this file's asm), the driver's own asm. */
++	evb10_lab_sgi_test(round, "A.  raw SGI 0 via GICR_ISPENDR0", max, gicr, evb10_lab_send_mmio);
++	evb10_lab_sgi_test(round, "A2. raw SGI 0 via ICC_SGI1R_EL1", max, gicr, evb10_lab_send_icc);
++	evb10_lab_sgi_test(round, "A3. raw SGI 0 via armcpu_ipi_selftest", max, gicr, evb10_lab_send_driver);
++
++	/* B. The kernel's own cross-call. */
++	for (int core = 0; core <= max && core < MAX_CPUS && core < 16; core++) {
++		cpu_data_t *cdp = CpuDataEntries[core].cpu_data_vaddr;
++		struct evb10_xcall_slot *slot = &evb10_xcall_slot[core];
++		uint32_t from, taken0, taken1;
++		uint64_t t0, t1 = 0;
++		kern_return_t rc;
++		bool ran = false;
++
++		if (cdp == NULL) {
++			continue;
++		}
++		if (evb10_xcall_stuck[core]) {
++			if (slot->ran == 0) {
++				printf("evb10: ipi lab %d: B. cpu_xcall -> core %d: skipped, the earlier cross-call never ran\n", round, core);
++				continue;
++			}
++			evb10_xcall_stuck[core] = false;   /* it ran after all, only later than the poll waited */
++		}
++		if ((cdp->cpu_signal & SIGPdisabled) != 0) {
++			printf("evb10: ipi lab %d: B. cpu_xcall -> core %d: refused, the kernel still treats it as unsignalable (SIGPdisabled; signals sent %u, taken %u)\n",
++			    round, core, armcpu_core_sgi_sent[core & 7], armcpu_core_sgi[core & 7]);
++			continue;
++		}
++		disable_preemption();
++		from = current_processor()->cpu_id;
++		if ((int)from == core) {
++			enable_preemption();
++			continue;
++		}
++		taken0 = armcpu_core_sgi[core & 7];
++		slot->ran = 0;
++		t0 = mach_absolute_time();
++		rc = cpu_xcall(core, evb10_xcall_probe, (void *)slot);
++		if (rc == KERN_SUCCESS) {
++			do {
++				t1 = mach_absolute_time();
++				if (slot->ran != 0) {
++					ran = true;
++					break;
++				}
++			} while (evb10_lab_ns(t0, t1) < EVB10_LAB_TIMEOUT_US * 1000ULL);
++		}
++		taken1 = armcpu_core_sgi[core & 7];
++		enable_preemption();
++		if (rc != KERN_SUCCESS) {
++			printf("evb10: ipi lab %d: B. cpu_xcall cpu %u -> core %d: rc %d (refused)\n", round, from, core, rc);
++		} else if (ran) {
++			/* Two lines: the console drops the tail (and the newline) of a printf longer than ~380 characters. */
++			printf("evb10: ipi lab %d: B. cpu_xcall cpu %u -> core %d: ran %llu ns after the call (SGIs taken %u -> %u, signals sent %u) | core reports mpidr %#llx midr %#llx cntfrq %llu\n",
++			    round, from, core, evb10_lab_ns(t0, slot->ran), taken0, taken1, armcpu_core_sgi_sent[core & 7], slot->mpidr, slot->midr,
++			    slot->freq);
++			printf("evb10: ipi lab %d: B. core %d counters: cntvct %llu cntpct %llu mach %llu: cntpct - cntvct %lld, cntvct - mach %lld\n",
++			    round, core, slot->cntvct, slot->cntpct, slot->mach, (long long)(slot->cntpct - slot->cntvct),
++			    (long long)(slot->cntvct - slot->mach));
++		} else {
++			evb10_xcall_stuck[core] = true;
++			printf("evb10: ipi lab %d: B. cpu_xcall cpu %u -> core %d: NOT RUN within %u us (SGIs taken %u -> %u, signals sent %u)\n", round,
++			    from, core, EVB10_LAB_TIMEOUT_US, taken0, taken1, armcpu_core_sgi_sent[core & 7]);
++		}
++	}
++	printf("evb10: ipi lab %d: done | ipi sent %llu received %llu | per core sent %u %u %u %u %u %u %u %u taken %u %u %u %u %u %u %u %u\n", round,
++	    armcpu_ipi_sent, armcpu_ipi_interrupts,
++	    armcpu_core_sgi_sent[0], armcpu_core_sgi_sent[1], armcpu_core_sgi_sent[2], armcpu_core_sgi_sent[3], armcpu_core_sgi_sent[4],
++	    armcpu_core_sgi_sent[5], armcpu_core_sgi_sent[6], armcpu_core_sgi_sent[7],
++	    armcpu_core_sgi[0], armcpu_core_sgi[1], armcpu_core_sgi[2], armcpu_core_sgi[3], armcpu_core_sgi[4], armcpu_core_sgi[5],
++	    armcpu_core_sgi[6], armcpu_core_sgi[7]);
++}
++
++static void
++evb10_ipi_lab(int max, int round)
++{
++	volatile uint8_t *gicd = (volatile uint8_t *)ml_io_map(EVB10_GICD_PHYS, 0x10000);
++	volatile uint8_t *gicr = (volatile uint8_t *)ml_io_map(EVB10_GICR_PHYS, 0x100000);
++
++	if (gicd == NULL || gicr == NULL) {
++		printf("evb10: ipi lab %d: cannot map the GIC (gicd %p gicr %p)\n", round, gicd, gicr);
++		return;
++	}
++	printf("evb10: ipi lab %d: ipi sent %llu received %llu | gicd ctlr %#x typer %#x iidr %#x | boot cpu isenabler0 %#x pmr %#x igrpen1 %#x\n", round,
++	    armcpu_ipi_sent, armcpu_ipi_interrupts, evb10_gic_rd(gicd, 0), evb10_gic_rd(gicd, 4), evb10_gic_rd(gicd, 8), armcpu_gic_boot[1],
++	    armcpu_gic_boot[5], armcpu_gic_boot[6]);
++	evb10_ipi_lab_round(round, max, gicr);
++}
++
++/*
++ * The panel's video port, as seen from the interrupt flags of the VOP2 (base 0xfdd90000): six groups of four words, EN / CLR / STATUS / RAW
++ * at 0x80 sys0, 0x90 sys1, 0xa0 vp0, 0xb0 vp1, 0xc0 vp2, 0xd0 vp3. RAW (+0xc) is set whether or not the bit is enabled, and a write of ones to
++ * CLR (+0x4) clears it, so each report shows what happened since the last one: the bit that is set in every report is the frame start, a bit
++ * that appears together with the flicker is the video port running dry (underflow) or the window's AXI port reporting an error.
++ * Switched on by evb10_userland_prepare() once the window is up (evb10-vop=2/3).
++ */
++volatile uint32_t evb10_vop_watch;
++
++static void
++evb10_vop_intr_report(void)
++{
++	static volatile uint32_t *vop;
++	static const uint32_t groups[6] = { 0x80, 0x90, 0xa0, 0xb0, 0xc0, 0xd0 };
++	static const char *const names[6] = { "sys0", "sys1", "vp0", "vp1", "vp2", "vp3" };
++
++	if (!evb10_vop_watch) {
++		return;
++	}
++	if (vop == NULL) {
++		vop = (volatile uint32_t *)ml_io_map(0xfdd90000UL, 0x10000);
++		if (vop == NULL) {
++			evb10_vop_watch = 0;
++			return;
++		}
++	}
++	printf("evb10: vop intr (en/status/raw since the last report): %s %08x %08x %08x | %s %08x %08x %08x | %s %08x %08x %08x | %s %08x %08x %08x\n",
++	    names[0], vop[groups[0] / 4], vop[groups[0] / 4 + 2], vop[groups[0] / 4 + 3],
++	    names[1], vop[groups[1] / 4], vop[groups[1] / 4 + 2], vop[groups[1] / 4 + 3],
++	    names[2], vop[groups[2] / 4], vop[groups[2] / 4 + 2], vop[groups[2] / 4 + 3],
++	    names[3], vop[groups[3] / 4], vop[groups[3] / 4 + 2], vop[groups[3] / 4 + 3]);
++	printf("evb10: vop intr (en/status/raw since the last report): %s %08x %08x %08x | %s %08x %08x %08x | vp3 line %u esmart3 ctrl %08x\n",
++	    names[4], vop[groups[4] / 4], vop[groups[4] / 4 + 2], vop[groups[4] / 4 + 3],
++	    names[5], vop[groups[5] / 4], vop[groups[5] / 4 + 2], vop[groups[5] / 4 + 3],
++	    (vop[0x6c / 4] >> 16) & 0x1fff, vop[0x1e10 / 4]);
++	for (int i = 0; i < 6; i++) {
++		vop[groups[i] / 4 + 1] = 0xffffffffU;
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++
++void
++evb10_cpu_stats_dump(void)
++{
++#if defined(__arm64__)
++	int max = ml_get_max_cpu_number();
++
++	evb10_vop_intr_report();
++
++	if (armcpu_smp_requested) {
++		printf("evb10: smp running %u conduit %u | step %u %u %u %u %u %u %u %u | psci %d %d %d %d %d %d %d %d | fail %u %u %u %u %u %u %u %u | timer %u %u %u %u %u %u %u %u | sgi %u %u %u %u %u %u %u %u\n",
++		    armcpu_smp_running, armcpu_smp_conduit,
++		    armcpu_smp_step[0], armcpu_smp_step[1], armcpu_smp_step[2], armcpu_smp_step[3], armcpu_smp_step[4], armcpu_smp_step[5],
++		    armcpu_smp_step[6], armcpu_smp_step[7],
++		    armcpu_smp_psci_rc[0], armcpu_smp_psci_rc[1], armcpu_smp_psci_rc[2], armcpu_smp_psci_rc[3], armcpu_smp_psci_rc[4],
++		    armcpu_smp_psci_rc[5], armcpu_smp_psci_rc[6], armcpu_smp_psci_rc[7],
++		    armcpu_smp_fail[0], armcpu_smp_fail[1], armcpu_smp_fail[2], armcpu_smp_fail[3], armcpu_smp_fail[4], armcpu_smp_fail[5],
++		    armcpu_smp_fail[6], armcpu_smp_fail[7],
++		    armcpu_core_timer[0], armcpu_core_timer[1], armcpu_core_timer[2], armcpu_core_timer[3], armcpu_core_timer[4],
++		    armcpu_core_timer[5], armcpu_core_timer[6], armcpu_core_timer[7],
++		    armcpu_core_sgi[0], armcpu_core_sgi[1], armcpu_core_sgi[2], armcpu_core_sgi[3], armcpu_core_sgi[4], armcpu_core_sgi[5],
++		    armcpu_core_sgi[6], armcpu_core_sgi[7]);
++		/*
++		 * Breadcrumbs the reset path (osfmk/arm64/start.s) stores for each core with its MMU off. Written straight
++		 * to memory, so drop whatever this CPU has cached of them first. stage: 1 reset_vector, 2 at EL1, 3 cpu data
++		 * found, 4 start_cpu, 5 about to enable the MMU. el is CurrentEL (8 = EL2, 4 = EL1) at entry / after the drop.
++		 */
++		/* Once every core is up the first dump has said it all; keep printing only while a core is missing. */
++		static bool evb10_trace_done;
++
++		for (int core = 1; core < 8 && !evb10_trace_done; core++) {
++			volatile uint64_t *t = &rk3588_smp_trace[core * 8];
++
++			__asm__ volatile ("dc civac, %0" :: "r" (t) : "memory");
++			__asm__ volatile ("dsb sy" ::: "memory");
++			if ((uint32_t)t[0] != 0) {
++				printf("evb10: smp trace core %d stage %u el %#llx/%#llx mpidr %#llx cpudata %#llx handler %#llx sctlr %#llx\n",
++				    core, (uint32_t)t[0], t[1], t[3], t[2], t[4], t[5], t[6]);
++			}
++		}
++		if (armcpu_smp_running >= (uint32_t)max) {
++			static uint32_t evb10_lab_calls;
++
++			evb10_trace_done = true;
++			/* The sampler comes by every ~10 s: once when the last core is up, once ~70 s later (idle cores asleep by then). */
++			evb10_lab_calls++;
++			if (evb10_lab_calls == 1 || evb10_lab_calls == 8) {
++				evb10_ipi_lab(max, evb10_lab_calls == 1 ? 1 : 2);
++			}
++		}
++	}
++
++	for (int cpu = 0; cpu <= max && cpu < MAX_CPUS; cpu++) {
++		cpu_data_t *cdp = CpuDataEntries[cpu].cpu_data_vaddr;
++		thread_t active;
++		task_t owner;
++
++		if (cdp == NULL) {
++			continue;
++		}
++		active = cdp->cpu_active_thread;
++		owner = active != THREAD_NULL ? get_threadtask(active) : TASK_NULL;
++		printf("evb10: cpu %d irq %llu ipi %llu timer %llu undef %llu dabt %llu iabt %llu running tid %#llx pid %d%s\n", cpu,
++		    cdp->cpu_stat.irq_ex_cnt, cdp->cpu_stat.ipi_cnt, cdp->cpu_stat.timer_cnt, cdp->cpu_stat.undef_ex_cnt,
++		    cdp->cpu_stat.data_ex_cnt, cdp->cpu_stat.instr_ex_cnt, active != THREAD_NULL ? active->thread_id : 0ull,
++		    owner != TASK_NULL ? task_pid(owner) : -1, active != THREAD_NULL && (active->state & TH_IDLE) ? " (idle)" : "");
++	}
++#endif
++}
++#endif /* DEVELOPMENT || DEBUG */

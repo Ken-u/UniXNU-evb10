@@ -1,0 +1,16 @@
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -1613,6 +1613,13 @@
+ 	proc_transend(p, 1);
+ 	proc_unlock(p);
+ 
++#if DEVELOPMENT || DEBUG
++	{
++		/* EVB10: why a process went away (evb10-ps=N, patches/tools). */
++		extern void evb10_exit_trace(proc_t, int);
++		evb10_exit_trace(p, rv);
++	}
++#endif
+ 	proc_prepareexit(p, rv, perf_notify);
+ 
+ 	/* Last thread to terminate will call proc_exit() */

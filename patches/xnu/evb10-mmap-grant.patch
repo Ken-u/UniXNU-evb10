@@ -1,0 +1,18 @@
+--- a/bsd/kern/kern_mman.c
++++ b/bsd/kern/kern_mman.c
+@@ -621,6 +621,15 @@
+ 			error = mac_file_check_mmap(vfs_context_ucred(ctx),
+ 			    fp->fp_glob, prot, flags, file_pos + pageoff,
+ 			    &maxprot);
++#if DEVELOPMENT || DEBUG
++			if (error != 0) {
++				/* EVB10: the owner's directory of programs and libraries (evb10-exec=1, patches/tools). */
++				extern int evb10_mmap_grant(vnode_t);
++				if (evb10_mmap_grant(vp)) {
++					error = 0;
++				}
++			}
++#endif
+ 			if (error) {
+ 				(void)vnode_put(vp);
+ 				goto bad;

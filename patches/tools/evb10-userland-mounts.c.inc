@@ -1,0 +1,2256 @@
+#if DEVELOPMENT || DEBUG
+/*
+ * EVB10 userland: what the original owner code (offline-owner-systemos-mount.patch,
+ * native_owner_cache_prepare / native_owner_data_prepare) does before the first exec of launchd,
+ * for a board whose root image sits on its own eMMC and is vouched for by the board's owner
+ * instead of by the VerifiedRoot probe (boot-arg emmc-root-trust=1, package/Rk3588Emmc), plus the
+ * instruments that make a userland without a display visible on the serial line.
+ *
+ *  emmc-systemos-union=1  mount the SystemOS cryptex volume read-only over "/" as the upper layer of
+ *                         a union, so that /System/Library/Caches/com.apple.dyld (the dyld shared
+ *                         cache) and the rest of the cryptex are found where iPadOS looks for them,
+ *                         and tell dyld not to run ignition (dyld_flags bit 3), because the image
+ *                         was vouched for by the owner and not by an Image4 manifest.
+ *  emmc-data-mount=1      mount the Data volume of the RAM disk the payload hands over
+ *                         (/chosen/memory-map/RAMDisk, published by package/Rk3588Emmc as a writable
+ *                         block device of its own; its APFS volume is /dev/diskNsM) read-write on
+ *                         /private/var. NOT /dev/md0, which is the same memory: Apple's APFS takes the
+ *                         volume index from the device NAME ("diskNsM" is volume M-1; "md0" is -1 and
+ *                         nx_is_mount_valid refuses it with ENOENT, xnu-probe/runs/emmc5f).
+ *  emmc-data-copy=0       leave the new Data volume empty. By default the initial /private/var of the
+ *                         OS volume (the directory the mount covers) is copied into it, as the
+ *                         official seed fixture does on a Mac (scripts/prepare-owner-data-fixture.py):
+ *                         nothing on a Linux host can write into an APFS volume, so the seed that
+ *                         xnu-probe/make-data-seed.sh makes is an empty container.
+ *                         With emmc-data-persist=1 the volume is a window of the eMMC (package/Rk3588Emmc) and keeps
+ *                         its contents: the copy (and the preference files below) is made once, and a marker file
+ *                         (EVB10_DATA_MARKER) written after it says so. emmc-data-reset=1 formats the window again.
+ *  evb10-ps=N             print the process table every N seconds (and every process exit with its
+ *                         reason): a userland whose output goes to no console is otherwise a black box.
+ *  evb10-ps-secs=N        stop printing the table after N seconds (default 900).
+ *
+ * Both mounts are made with the exact user-mount payload the original code qualified against this
+ * APFS, from the init process itself. Neither is fatal: the status goes to the log and a launchd that
+ * cannot start will say why. Run at most once.
+ */
+#include <sys/dirent.h>
+#include <sys/wait.h>
+#include <kern/clock.h>
+extern int native_emmc_volume_device(const char *, dev_t *, char *, size_t);
+extern int native_emmc_cache_trusted(dev_t);
+extern int native_emmc_root_trusted(dev_t);
+extern int native_emmc_data_device(const char *, dev_t *, char *, size_t);
+extern volatile uint32_t native_emmc_data_persistent;   /* 1: the Data volume is a window of the card, it outlives the boot */
+extern void commpage_update_dyld_flags(uint64_t);
+extern void calcru(struct proc *p, struct timeval *up, struct timeval *sp, struct timeval *ip);
+
+/* The volume of the Data seed. Not a secret and not random: xnu-probe/make-data-seed.sh makes the seed's
+ * volume this UUID (mkapfs -U), scripts/check-evb10.py checks that the two agree. */
+#define EVB10_DATA_VOLUME_UUID "3E8C2B1A-5D47-4F90-A6C3-9B1D7E0F2A48"
+
+volatile int evb10_union_stage = 0;
+volatile int evb10_union_status = -1;
+volatile int evb10_data_stage = 0;
+volatile int evb10_data_status = -1;
+volatile int evb10_trace_exits = 0;
+
+/* The user mount of the original code: type, path and the device string are copied to the scratch page
+ * of process 1 and mount(2) is called on them. */
+static int
+evb10_apfs_mount(proc_t p, user_addr_t scratch, const char *path, const char *device_path, int flags)
+{
+	uint8_t mount_data[0x150] = {0};
+	user64_addr_t spec = scratch + 0x160;
+	uint64_t apfs_flags = (flags & MNT_RDONLY) ? MNT_RDONLY : 0;
+	uint16_t mount_mode = 1;
+	uint32_t anonymous_owner = 99;
+	struct mount_args request = {.type = scratch + 0x100, .path = scratch + 0x120, .flags = flags, .data = scratch + 0x200};
+	int32_t result = 0;
+	int error;
+
+	memcpy(mount_data, &spec, sizeof(spec));
+	memcpy(mount_data + 8, &apfs_flags, sizeof(apfs_flags));
+	memcpy(mount_data + 16, &mount_mode, sizeof(mount_mode));
+	memcpy(mount_data + 0x144, &anonymous_owner, sizeof(anonymous_owner));
+	memcpy(mount_data + 0x148, &anonymous_owner, sizeof(anonymous_owner));
+	if ((error = copyout("apfs", request.type, 5)) != 0 ||
+	    (error = copyout(path, request.path, strlen(path) + 1)) != 0 ||
+	    (error = copyout(device_path, spec, strlen(device_path) + 1)) != 0 ||
+	    (error = copyout(mount_data, request.data, sizeof(mount_data))) != 0) {
+		return error;
+	}
+	return mount(p, &request, &result);
+}
+
+static int
+evb10_systemos_union(proc_t p, user_addr_t scratch)
+{
+	/* The SystemOS volume of the IPSW (volume "...SystemCryptex"), also the original owner code's constant. */
+	static const char volume[] = "8846FE78-2910-4297-AF97-D59BB6F8FC16";
+	vnode_t original_root = rootvnode, mounted_root = NULLVP;
+	mount_t root_mount = vnode_mount(original_root);
+	vnode_t device_vnode = vfs_devvp(root_mount);
+	dev_t root_device = device_vnode ? vnode_specrdev(device_vnode) : NODEV, selected = NODEV, actual = NODEV;
+	char device_path[64] = {0};
+	int error = EAUTH;
+
+	if (device_vnode) {
+		vnode_put(device_vnode);
+	}
+	/* The cryptex goes over a root the owner vouched for and that is read-only, nothing else. */
+	if (!(vfs_flags(root_mount) & MNT_RDONLY) || root_device == NODEV || !native_emmc_root_trusted(root_device)) {
+		printf("evb10: SystemOS union: the root is not the owner's read-only volume\n");
+		return error;
+	}
+	evb10_union_stage = 1;
+	if (!native_emmc_volume_device(volume, &selected, device_path, sizeof(device_path))) {
+		printf("evb10: SystemOS union: no volume %s in the SystemOS window\n", volume);
+		return ENOENT;
+	}
+	evb10_union_stage = 2;
+	error = evb10_apfs_mount(p, scratch, "/", device_path, MNT_RDONLY | MNT_UNION);
+	if (error) {
+		printf("evb10: SystemOS union: mounting %s over / failed: %d\n", device_path, error);
+		return error;
+	}
+	evb10_union_stage = 3;
+	error = vnode_lookup("/", 0, &mounted_root, vfs_context_current());
+	if (error) {
+		return error;
+	}
+	mount_t cache_mount = vnode_mount(mounted_root);
+	device_vnode = vfs_devvp(cache_mount);
+	actual = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
+	if (device_vnode) {
+		vnode_put(device_vnode);
+	}
+	/* What the original code checks after the mount: the union really is the root now, it is read-only,
+	 * it is the volume that was asked for, it is APFS, and it is still the owner's. */
+	bool readonly = (vfs_flags(cache_mount) & MNT_RDONLY) != 0;
+	bool union_root = (vfs_flags(cache_mount) & MNT_UNION) && vnode_mountedhere(original_root) == cache_mount &&
+	    rootvnode == mounted_root;
+	bool authorized = readonly && union_root && actual == selected && !strcmp(vfs_statfs(cache_mount)->f_fstypename, "apfs") &&
+	    native_emmc_cache_trusted(actual);
+	vnode_put(mounted_root);
+	printf("evb10: SystemOS union: device %u,%u readonly %d union-root %d authorized %d\n", major(actual), minor(actual),
+	    readonly, union_root, authorized);
+	if (!authorized) {
+		return EAUTH;
+	}
+	evb10_union_stage = 4;
+	/* Original dyld bit 3 selects no ignition; the owner chain and the read-only mounts above are what vouches
+	 * for the images in this mode. */
+	dyld_flags |= UINT64_C(8);
+	commpage_update_dyld_flags(dyld_flags);
+	evb10_union_stage = 5;
+	return 0;
+}
+
+/*
+ * The Data seed's tree.
+ *
+ * The seed of this board is an empty APFS container. What the official seed holds on top of that -- the
+ * initial /private/var tree of the OS volume without staged_system_apps -- is copied in here from the
+ * directory the Data mount covers (mount->mnt_vnodecovered), the way the original owner code copies
+ * staged_system_apps (offline-owner... native_staged_apps_*): directories, regular files (through the
+ * OS volume's decmpfs, which is why the compression kext is a prelink root) and symbolic links, with
+ * the mode and the owner of the source. The walk is iterative, because APFS operations need much of
+ * the kernel stack and a recursion as deep as an app bundle overflowed it there.
+ */
+volatile int evb10_copy_dirs = 0;
+volatile int evb10_copy_files = 0;
+volatile int evb10_copy_links = 0;
+volatile int evb10_copy_other = 0;
+volatile int evb10_copy_skipped = 0;
+volatile int evb10_copy_failed = 0;
+volatile int evb10_copy_error = 0;
+volatile int evb10_copy_kib = 0;
+static uint64_t evb10_copy_bytes;
+static int evb10_copy_reports;
+
+#define EVB10_COPY_POOL (1024 * 1024)
+#define EVB10_COPY_DIRS 8192
+#define EVB10_COPY_CHUNK (512 * 1024)
+#define EVB10_COPY_ENTRIES 8192
+
+struct evb10_copy {
+	proc_t p;
+	user_addr_t scratch;
+	vfs_context_t ctx;
+	vnode_t root;               /* the OS volume's /private/var, iocount held by the caller */
+	size_t base;                /* strlen("/private/var") */
+	uint8_t *buffer;
+	uint8_t *entries;
+	char *pool;                 /* directories still to copy, as paths relative to root */
+	uint32_t *at;
+	uint32_t used, count;
+};
+
+struct evb10_attrs {
+	mode_t mode;
+	uid_t uid;
+	gid_t gid;
+};
+
+static void
+evb10_copy_fail(const char *path, const char *what, int error)
+{
+	evb10_copy_failed++;
+	evb10_copy_error = error;
+	if (evb10_copy_reports++ < 40) {
+		printf("evb10: Data: %s %s failed: %d\n", what, path, error);
+	}
+}
+
+static void
+evb10_copy_getattrs(vnode_t vp, vfs_context_t ctx, struct evb10_attrs *attrs, mode_t fallback)
+{
+	struct vnode_attr va;
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_mode);
+	VATTR_WANTED(&va, va_uid);
+	VATTR_WANTED(&va, va_gid);
+	attrs->mode = fallback;
+	attrs->uid = 0;
+	attrs->gid = 0;
+	if (!vnode_getattr(vp, &va, ctx)) {
+		if (VATTR_IS_SUPPORTED(&va, va_mode)) {
+			attrs->mode = va.va_mode & 07777;
+		}
+		if (VATTR_IS_SUPPORTED(&va, va_uid)) {
+			attrs->uid = va.va_uid;
+		}
+		if (VATTR_IS_SUPPORTED(&va, va_gid)) {
+			attrs->gid = va.va_gid;
+		}
+	}
+}
+
+static int
+evb10_copy_setattrs(vnode_t vp, vfs_context_t ctx, const struct evb10_attrs *attrs, bool link)
+{
+	struct vnode_attr va;
+	VATTR_INIT(&va);
+	VATTR_SET(&va, va_uid, attrs->uid);
+	VATTR_SET(&va, va_gid, attrs->gid);
+	if (!link) {
+		VATTR_SET(&va, va_mode, attrs->mode);
+	}
+	return vnode_setattr(vp, &va, ctx);
+}
+
+/* The scratch page is 4 KiB: the mount arguments end below 0x400, the link path of symlink(2) is at 0x600,
+ * and the path of mkdir(2) and the target of symlink(2) at 0xa00, a MAXPATHLEN each. */
+static int
+evb10_copy_mkdir(struct evb10_copy *copy, const char *path, const struct evb10_attrs *attrs)
+{
+	struct mkdir_args request = {.path = copy->scratch + 0xa00, .mode = 0755};
+	int32_t result = 0;
+	int error = copyout(path, request.path, strlen(path) + 1);
+	if (!error) {
+		error = mkdir(copy->p, &request, &result);
+	}
+	if (error && error != EEXIST) {
+		return error;
+	}
+	vnode_t vp = NULLVP;
+	error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, copy->ctx);
+	if (!error) {
+		error = evb10_copy_setattrs(vp, copy->ctx, attrs, false);
+		vnode_put(vp);
+	}
+	return error;
+}
+
+static int
+evb10_copy_ensure_dir(struct evb10_copy *copy, const char *path, mode_t mode, uid_t uid, gid_t gid)
+{
+	vnode_t vp = NULLVP;
+	if (!vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, copy->ctx)) {
+		vnode_put(vp);
+		return 0;
+	}
+	struct evb10_attrs attrs = {.mode = mode, .uid = uid, .gid = gid};
+	return evb10_copy_mkdir(copy, path, &attrs);
+}
+
+/* Reads to the end of the source rather than trusting a size: most of these files are compressed on the OS volume. */
+static int
+evb10_copy_file(struct evb10_copy *copy, vnode_t source, const char *path, const struct evb10_attrs *attrs)
+{
+	vfs_context_t ctx = copy->ctx;
+	int error = VNOP_OPEN(source, FREAD, ctx);
+	if (error) {
+		return error;
+	}
+	vnode_t vp = NULLVP;
+	error = vnode_open(path, O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, attrs->mode & 0777, 0, &vp, ctx);
+	for (off_t at = 0; !error;) {
+		int resid = 0;
+		error = vn_rdwr(UIO_READ, source, (caddr_t)copy->buffer, EVB10_COPY_CHUNK, at, UIO_SYSSPACE, IO_NOAUTH,
+		    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
+		int length = EVB10_COPY_CHUNK - resid;
+		if (error || length <= 0) {
+			break;
+		}
+		error = vn_rdwr(UIO_WRITE, vp, (caddr_t)copy->buffer, length, at, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT,
+		    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
+		if (!error && resid) {
+			error = EIO;
+		}
+		at += length;
+		evb10_copy_bytes += (uint64_t)length;
+	}
+	if (vp) {
+		if (!error) {
+			error = evb10_copy_setattrs(vp, ctx, attrs, false);
+		}
+		/* Each file goes to the medium before the next: without it the original owner code's copy piled up
+		 * dirty pages until it stalled. */
+		if (!error) {
+			error = VNOP_FSYNC(vp, MNT_WAIT, ctx);
+		}
+		int close_error = vnode_close(vp, FWRITE, ctx);
+		if (!error) {
+			error = close_error;
+		}
+	}
+	VNOP_CLOSE(source, FREAD, ctx);
+	return error;
+}
+
+static int
+evb10_copy_symlink(struct evb10_copy *copy, vnode_t source, const char *path, const struct evb10_attrs *attrs)
+{
+	char *target = (char *)copy->buffer;
+	uio_t uio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ);
+	if (!uio) {
+		return ENOMEM;
+	}
+	uio_addiov(uio, CAST_USER_ADDR_T(target), MAXPATHLEN - 1);
+	int error = VNOP_READLINK(source, uio, copy->ctx);
+	size_t length = (size_t)(MAXPATHLEN - 1) - (size_t)uio_resid(uio);
+	uio_free(uio);
+	if (error) {
+		return error;
+	}
+	target[length] = '\0';
+	struct symlink_args request = {.path = copy->scratch + 0xa00, .link = copy->scratch + 0x600};
+	int32_t result = 0;
+	if ((error = copyout(target, request.path, length + 1)) != 0 ||
+	    (error = copyout(path, request.link, strlen(path) + 1)) != 0) {
+		return error;
+	}
+	error = symlink(copy->p, &request, &result);
+	if (error && error != EEXIST) {
+		return error;
+	}
+	vnode_t vp = NULLVP;
+	error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, copy->ctx);
+	if (!error) {
+		error = evb10_copy_setattrs(vp, copy->ctx, attrs, true);
+		vnode_put(vp);
+	}
+	return error;
+}
+
+/* Copies the entries of DIR into the Data directory PATH (appending each name to PATH and cutting it off again) and
+ * queues its subdirectories, whose source-relative paths start at REL inside PATH. */
+static void
+evb10_copy_dir(struct evb10_copy *copy, vnode_t dir, char *path, size_t path_size, size_t rel)
+{
+	vfs_context_t ctx = copy->ctx;
+	size_t base = strlen(path);
+	int error = VNOP_OPEN(dir, FREAD, ctx);
+	if (error) {
+		evb10_copy_fail(path, "open of", error);
+		return;
+	}
+	off_t offset = 0;
+	for (int eof = 0; !error && !eof;) {
+		uio_t uio = uio_create(1, offset, UIO_SYSSPACE, UIO_READ);
+		if (!uio) {
+			error = ENOMEM;
+			break;
+		}
+		uio_addiov(uio, CAST_USER_ADDR_T(copy->entries), EVB10_COPY_ENTRIES);
+		int count = 0;
+		error = vnode_readdir64(dir, uio, VNODE_READDIR_EXTENDED, &eof, &count, ctx);
+		uint32_t filled = EVB10_COPY_ENTRIES - (uint32_t)uio_resid(uio);
+		offset = uio_offset(uio);
+		uio_free(uio);
+		if (error || !filled) {
+			break;
+		}
+		for (uint32_t at = 0; at + offsetof(struct direntry, d_name) < filled;) {
+			struct direntry *entry = (struct direntry *)(copy->entries + at);
+			if (!entry->d_reclen || at + entry->d_reclen > filled) {
+				error = EINVAL;
+				break;
+			}
+			at += entry->d_reclen;
+			const char *name = entry->d_name;
+			if (!entry->d_ino || !strcmp(name, ".") || !strcmp(name, "..")) {
+				continue;
+			}
+			/* The official seed leaves the staged system apps out (tens of megabytes in a 32 MiB container). */
+			if (base == copy->base && !strcmp(name, "staged_system_apps")) {
+				evb10_copy_skipped++;
+				continue;
+			}
+			if (base + 1 + strlen(name) >= path_size) {
+				evb10_copy_fail(name, "name too long:", ENAMETOOLONG);
+				continue;
+			}
+			path[base] = '/';
+			strlcpy(path + base + 1, name, path_size - base - 1);
+			vnode_t child = NULLVP;
+			int child_error = vnode_lookupat(name, VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOCROSSMOUNT, &child, ctx, dir);
+			if (!child_error) {
+				struct evb10_attrs attrs;
+				enum vtype type = vnode_vtype(child);
+				evb10_copy_getattrs(child, ctx, &attrs, type == VDIR ? 0755 : 0644);
+				if (type == VDIR) {
+					child_error = evb10_copy_mkdir(copy, path, &attrs);
+					size_t length = strlen(path + rel) + 1;
+					if (!child_error && (copy->count == EVB10_COPY_DIRS || EVB10_COPY_POOL - copy->used < length)) {
+						child_error = ENOSPC;
+					}
+					if (!child_error) {
+						memcpy(copy->pool + copy->used, path + rel, length);
+						copy->at[copy->count++] = copy->used;
+						copy->used += (uint32_t)length;
+						if (++evb10_copy_dirs <= 400) {
+							printf("evb10: Data: dir %s (%o %u:%u)\n", path, (unsigned)attrs.mode, (unsigned)attrs.uid, (unsigned)attrs.gid);
+						}
+					}
+				} else if (type == VREG) {
+					child_error = evb10_copy_file(copy, child, path, &attrs);
+					if (!child_error) {
+						evb10_copy_files++;
+						evb10_copy_kib = (int)(evb10_copy_bytes >> 10);
+					}
+				} else if (type == VLNK) {
+					child_error = evb10_copy_symlink(copy, child, path, &attrs);
+					if (!child_error) {
+						evb10_copy_links++;
+					}
+				} else {
+					evb10_copy_other++;
+					printf("evb10: Data: %s is neither a directory, a file nor a link (vnode type %d), left out\n", path, (int)type);
+				}
+				vnode_put(child);
+			}
+			if (child_error) {
+				evb10_copy_fail(path, "copy of", child_error);
+			}
+			path[base] = '\0';
+		}
+	}
+	if (error) {
+		evb10_copy_fail(path, "reading", error);
+	}
+	VNOP_CLOSE(dir, FREAD, ctx);
+}
+
+/* Copies the tree below copy->root into the Data directory PATH, which exists. */
+static void
+evb10_copy_walk(struct evb10_copy *copy, char *path, size_t path_size)
+{
+	size_t root = strlen(path);
+	evb10_copy_dir(copy, copy->root, path, path_size, root + 1);
+	while (copy->count) {
+		const char *rel = copy->pool + copy->at[--copy->count];
+		if (root + 1 + strlen(rel) >= path_size) {
+			evb10_copy_fail(rel, "name too long:", ENAMETOOLONG);
+			continue;
+		}
+		path[root] = '/';
+		strlcpy(path + root + 1, rel, path_size - root - 1);
+		vnode_t dir = NULLVP;
+		int error = vnode_lookupat(rel, VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOCROSSMOUNT, &dir, copy->ctx, copy->root);
+		if (!error) {
+			evb10_copy_dir(copy, dir, path, path_size, root + 1);
+			vnode_put(dir);
+		} else {
+			evb10_copy_fail(path, "lookup of", error);
+		}
+		path[root] = '\0';
+	}
+}
+
+/*
+ * Preferences that skip the Setup assistant and keep the display on, as UniXNU's scripts/seed-data-skip-setup.py
+ * (--no-auto-dim) writes them into a Data seed on macOS. This Data volume is filled by the kernel from the OS volume,
+ * so the same files are written here (XML property lists: CFPreferences reads both forms). Without them the first
+ * boot starts Setup, and a board without input is put to sleep ~30 s after SpringBoard starts (IOPMrootDomain ->
+ * IOCPUSleepKernel -> ArmCpu::haltCPU). evb10-seed-prefs=0 turns it off.
+ */
+#define EVB10_PL_HEAD "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
+	"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
+	"<plist version=\"1.0\">\n<dict>\n"
+#define EVB10_PL_TAIL "</dict>\n</plist>\n"
+#define EVB10_PL_TRUE(k) "\t<key>" k "</key>\n\t<true/>\n"
+#define EVB10_PL_FALSE(k) "\t<key>" k "</key>\n\t<false/>\n"
+
+static const struct {
+	const char *name;
+	const char *body;
+} evb10_seed_prefs[] = {
+	{"com.apple.purplebuddy",
+	 EVB10_PL_HEAD EVB10_PL_TRUE("SetupDone") EVB10_PL_TRUE("SetupFinishedAllSteps")
+	 "\t<key>SetupVersion</key>\n\t<integer>11</integer>\n" EVB10_PL_FALSE("daemonizeNeedsToRun") EVB10_PL_TAIL},
+	{"com.apple.purplebuddy.notbackedup",
+	 EVB10_PL_HEAD EVB10_PL_FALSE("ShouldRunDiagnosticsMiniBuddy") EVB10_PL_FALSE("ShouldRunHSA2MiniBuddy")
+	 EVB10_PL_FALSE("ShouldRunKeychainSyncMiniBuddy") EVB10_PL_FALSE("ShouldRunMesaMiniBuddy")
+	 EVB10_PL_FALSE("ShouldRunPaymentMiniBuddy") EVB10_PL_FALSE("ShouldRunStandardMiniBuddy")
+	 EVB10_PL_FALSE("SilentICDPUpgrade") EVB10_PL_TAIL},
+	{"com.apple.managedconfiguration.notbackedup",
+	 EVB10_PL_HEAD EVB10_PL_FALSE("LockdownActivationIndicatesCloudConfigurationAvailable") EVB10_PL_TAIL},
+	{"com.apple.springboard",
+	 EVB10_PL_HEAD EVB10_PL_TRUE("BKNoWatchdogs")
+	 "\t<key>FBLaunchWatchdogExceptions</key>\n\t<dict>\n\t\t<key>com.apple.purplebuddy</key>\n\t\t<real>100</real>\n\t</dict>\n"
+	 EVB10_PL_FALSE("MCForceShowCloudConfigurationUI")
+	 EVB10_PL_TRUE("SBDisableAutoDim") EVB10_PL_TRUE("SBDontDimOrLockOnAC") EVB10_PL_TRUE("SBDisableIdleSleep") EVB10_PL_TAIL},
+	{"com.apple.migration",
+	 EVB10_PL_HEAD "\t<key>LastSystemVersion</key>\n\t<string>21H461</string>\n"
+	 "\t<key>DMUserDataDisposition</key>\n\t<dict>\n\t\t<key>SyntheticDidUpgrade</key>\n\t\t<false/>\n"
+	 "\t\t<key>buildVersion</key>\n\t\t<string>21H461</string>\n\t</dict>\n" EVB10_PL_TAIL},
+};
+
+/* A file of exactly these bytes (O_TRUNC), written in pieces of at most 1 MiB, with this owner and mode, and on the card before it returns. */
+static int
+evb10_write_bytes(struct evb10_copy *copy, const char *path, const void *data, size_t size, mode_t mode, uid_t uid, gid_t gid)
+{
+	vfs_context_t ctx = copy->ctx;
+	vnode_t vp = NULLVP;
+	int error = vnode_open(path, O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, mode, 0, &vp, ctx);
+	if (error) {
+		return error;
+	}
+	for (size_t done = 0; !error && done < size;) {
+		size_t piece = MIN(size - done, (size_t)(1024 * 1024));
+		int resid = 0;
+		error = vn_rdwr(UIO_WRITE, vp, (caddr_t)((uintptr_t)data + done), (int)piece, (off_t)done, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT,
+		    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
+		if (!error && resid) {
+			error = EIO;
+		}
+		done += piece;
+	}
+	if (!error) {
+		struct evb10_attrs attrs = {.mode = mode, .uid = uid, .gid = gid};
+		error = evb10_copy_setattrs(vp, ctx, &attrs, false);
+	}
+	if (!error) {
+		error = VNOP_FSYNC(vp, MNT_WAIT, ctx);
+	}
+	int close_error = vnode_close(vp, FWRITE, ctx);
+	return error ? error : close_error;
+}
+
+static int
+evb10_seed_write(struct evb10_copy *copy, const char *path, const char *text, mode_t mode, uid_t uid, gid_t gid)
+{
+	return evb10_write_bytes(copy, path, text, strlen(text), mode, uid, gid);
+}
+
+static void
+evb10_seed_prefs_write(struct evb10_copy *copy)
+{
+	int want = 1;
+	PE_parse_boot_argn("evb10-seed-prefs", &want, sizeof(want));
+	if (!want) {
+		return;
+	}
+	static const struct {
+		const char *path;
+		mode_t mode;
+		uid_t uid;
+		gid_t gid;
+	} dirs[] = {
+		{"/private/var/mobile/Library", 0755, 501, 501},
+		{"/private/var/mobile/Library/Preferences", 0755, 501, 501},
+		/* On a device these live on the data volume (UniXNU's seed tool and ios-sweet's root tweaks make them too). */
+		{"/private/var/containers", 0755, 0, 0},
+		{"/private/var/containers/Bundle", 0755, 0, 0},
+		{"/private/var/containers/Data", 0755, 0, 0},
+		{"/private/var/containers/Data/System", 0755, 0, 0},
+		{"/private/var/containers/Shared", 0755, 0, 0},
+		{"/private/var/containers/Shared/SystemGroup", 0755, 0, 0},
+		{"/private/var/containers/Temp", 0755, 0, 0},
+	};
+	int failures = 0;
+	for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
+		int error = evb10_copy_ensure_dir(copy, dirs[i].path, dirs[i].mode, dirs[i].uid, dirs[i].gid);
+		if (error) {
+			evb10_copy_fail(dirs[i].path, "creating", error);
+			failures++;
+		}
+	}
+	char *path = kalloc_data(MAXPATHLEN, Z_WAITOK);
+	if (!path) {
+		return;
+	}
+	for (size_t i = 0; i < sizeof(evb10_seed_prefs) / sizeof(evb10_seed_prefs[0]); ++i) {
+		snprintf(path, MAXPATHLEN, "/private/var/mobile/Library/Preferences/%s.plist", evb10_seed_prefs[i].name);
+		int error = evb10_seed_write(copy, path, evb10_seed_prefs[i].body, 0600, 501, 501);
+		if (error) {
+			evb10_copy_fail(path, "writing", error);
+			failures++;
+		}
+	}
+	kfree_data(path, MAXPATHLEN);
+	printf("evb10: Data: seeded %d preference files (Setup skipped, auto dim and idle sleep off), %d failures\n",
+	    (int)(sizeof(evb10_seed_prefs) / sizeof(evb10_seed_prefs[0])), failures);
+}
+
+/* Written on a persistent Data volume after the first complete copy; present = the tree is there, leave it alone. */
+#define EVB10_DATA_MARKER "/private/var/.evb10-seeded"
+
+static bool
+evb10_data_marker_present(vfs_context_t ctx)
+{
+	vnode_t vp = NULLVP;
+	if (vnode_lookup(EVB10_DATA_MARKER, VNODE_LOOKUP_NOFOLLOW, &vp, ctx)) {
+		return false;
+	}
+	vnode_put(vp);
+	return true;
+}
+
+static void
+evb10_data_copy(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	struct evb10_copy copy = {.p = p, .scratch = scratch, .ctx = vfs_context_current(), .base = sizeof("/private/var") - 1};
+	const bool persistent = native_emmc_data_persistent != 0;
+	if (persistent && evb10_data_marker_present(copy.ctx)) {
+		printf("evb10: Data: persistent volume, seeded by an earlier boot (%s exists): tree and preferences kept, nothing copied\n",
+		    EVB10_DATA_MARKER);
+		return;
+	}
+	vnode_t covered = data_mount->mnt_vnodecovered;
+	char *path = kalloc_data(MAXPATHLEN, Z_WAITOK);
+	int error = covered ? vnode_getwithref(covered) : ENOENT;
+
+	copy.buffer = kalloc_data(EVB10_COPY_CHUNK, Z_WAITOK);
+	copy.entries = kalloc_data(EVB10_COPY_ENTRIES, Z_WAITOK);
+	copy.pool = kalloc_data(EVB10_COPY_POOL, Z_WAITOK);
+	copy.at = kalloc_data(EVB10_COPY_DIRS * sizeof(uint32_t), Z_WAITOK);
+	if (error) {
+		printf("evb10: Data: the OS volume's /private/var under the mount is not reachable: %d\n", error);
+		evb10_copy_error = error;
+	} else {
+		if (path && copy.buffer && copy.entries && copy.pool && copy.at) {
+			struct evb10_attrs top;
+			copy.root = covered;
+			evb10_copy_getattrs(covered, copy.ctx, &top, 0755);
+			strlcpy(path, "/private/var", MAXPATHLEN);
+			error = evb10_copy_mkdir(&copy, path, &top);
+			if (error) {
+				evb10_copy_fail(path, "attributes of", error);
+			}
+			evb10_copy_walk(&copy, path, MAXPATHLEN);
+			/* The runtime directories of the official fixture: the OS tree does not have them. */
+			static const struct {
+				const char *path;
+				mode_t mode;
+				uid_t uid;
+				gid_t gid;
+			} runtime[] = {
+				{"/private/var/keybags", 0755, 0, 0},
+				{"/private/var/mobile", 0755, 501, 501},
+				{"/private/var/mobile/tmp", 0755, 501, 501},
+				{"/private/var/tmp", 01777, 0, 0},
+				{"/private/var/run", 0755, 0, 0},
+			};
+			for (size_t i = 0; i < sizeof(runtime) / sizeof(runtime[0]); ++i) {
+				error = evb10_copy_ensure_dir(&copy, runtime[i].path, runtime[i].mode, runtime[i].uid, runtime[i].gid);
+				if (error) {
+					evb10_copy_fail(runtime[i].path, "creating", error);
+				}
+			}
+			evb10_seed_prefs_write(&copy);
+		} else {
+			printf("evb10: Data: out of memory for the copy\n");
+			evb10_copy_error = ENOMEM;
+		}
+		vnode_put(covered);
+	}
+	if (path) {
+		kfree_data(path, MAXPATHLEN);
+	}
+	if (copy.buffer) {
+		kfree_data(copy.buffer, EVB10_COPY_CHUNK);
+	}
+	if (copy.entries) {
+		kfree_data(copy.entries, EVB10_COPY_ENTRIES);
+	}
+	if (copy.pool) {
+		kfree_data(copy.pool, EVB10_COPY_POOL);
+	}
+	if (copy.at) {
+		kfree_data(copy.at, EVB10_COPY_DIRS * sizeof(uint32_t));
+	}
+	printf("evb10: Data: tree copied: %d directories, %d files (%d KiB), %d links, %d left out, %d skipped, %d failures (last error %d)\n",
+	    evb10_copy_dirs, evb10_copy_files, evb10_copy_kib, evb10_copy_links, evb10_copy_other, evb10_copy_skipped,
+	    evb10_copy_failed, evb10_copy_error);
+	if (persistent) {
+		if (evb10_copy_failed) {
+			printf("evb10: Data: %d failures: the volume is not marked as seeded, the next boot copies again\n", evb10_copy_failed);
+		} else {
+			/* Everything above is on the card before the marker says so. */
+			int error = VFS_SYNC(data_mount, MNT_WAIT, copy.ctx);
+			if (!error) {
+				error = evb10_seed_write(&copy, EVB10_DATA_MARKER, "seeded by evb10-userland-mounts\n", 0644, 0, 0);
+			}
+			if (!error) {
+				error = VFS_SYNC(data_mount, MNT_WAIT, copy.ctx);
+			}
+			printf("evb10: Data: persistent volume marked as seeded (%s): %d\n", EVB10_DATA_MARKER, error);
+		}
+	}
+}
+
+static int
+evb10_data_mount(proc_t p, user_addr_t scratch)
+{
+	static const char volume[] = EVB10_DATA_VOLUME_UUID;
+	dev_t selected = NODEV, actual = NODEV;
+	char device_path[64] = {0};
+	vnode_t data_root = NULLVP;
+	int error;
+
+	evb10_data_stage = 1;
+	if (!native_emmc_data_device(volume, &selected, device_path, sizeof(device_path))) {
+		printf("evb10: Data: no volume %s in the Data RAM disk\n", volume);
+		return ENOENT;
+	}
+	printf("evb10: Data: volume %s is %s (device %u,%u)\n", volume, device_path, major(selected), minor(selected));
+	evb10_data_stage = 2;
+	error = evb10_apfs_mount(p, scratch, "/private/var", device_path, 0);
+	if (error) {
+		printf("evb10: Data: mounting %s on /private/var failed: %d\n", device_path, error);
+		return error;
+	}
+	evb10_data_stage = 3;
+	error = vnode_lookup("/private/var", 0, &data_root, vfs_context_current());
+	if (error) {
+		return error;
+	}
+	mount_t data_mount = vnode_mount(data_root);
+	vnode_t device_vnode = vfs_devvp(data_mount);
+	actual = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
+	if (device_vnode) {
+		vnode_put(device_vnode);
+	}
+	bool writable = !(vfs_flags(data_mount) & MNT_RDONLY);
+	bool apfs = !strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs");
+	vnode_put(data_root);
+	printf("evb10: Data: /private/var is device %u,%u writable %d apfs %d\n", major(actual), minor(actual), writable, apfs);
+	if (actual != selected || !writable || !apfs) {
+		return EINVAL;
+	}
+	evb10_data_stage = 4;
+	uint32_t copy_arg = 1;
+	(void) PE_parse_boot_argn("emmc-data-copy", &copy_arg, sizeof(copy_arg));
+	if (copy_arg) {
+		evb10_data_copy(p, scratch, data_mount);
+		evb10_data_stage = 5;
+	}
+	return 0;
+}
+
+/*
+ * The process table.
+ *
+ * Everything a userland says goes to logd, not to the console, so a launchd that has stopped making
+ * progress looks exactly like one that is working. The table says which processes exist, in which
+ * state, how much CPU they have used and how many system calls, Mach messages and context switches
+ * they have made: a pid whose counters stand still is waiting, one whose counters run is busy.
+ */
+/* Where the threads are (osfmk/kern/bsd_kern.c, evb10-thread-sample.patch). */
+extern void evb10_task_threads_dump(task_t task, int sample);
+extern void evb10_cpu_stats_dump(void);
+
+/* What the eMMC driver (package/Rk3588Emmc) has read so far and how long that took: the rate it
+ * really delivers while the userland pages itself in, not the one of its start-up probe. */
+extern volatile uint64_t native_emmc_block_requests, native_emmc_block_failures, native_emmc_read_calls;
+extern volatile uint64_t native_emmc_read_blocks, native_emmc_read_us;
+extern volatile uint32_t native_emmc_multi_block, native_emmc_dma;
+extern volatile uint64_t native_emmc_dma_blocks;
+/* ... and what it has written: only a persistent Data volume (emmc-data-persist=1) is ever written. */
+extern volatile uint64_t native_emmc_write_calls, native_emmc_write_blocks, native_emmc_write_us;
+extern volatile uint64_t native_emmc_write_failures, native_emmc_flush_calls;
+
+/* The boot cost of reading the whole 3 GB dyld shared cache (native-4k-signature-hash-cache.patch): ticks spent in the
+ * reads (the storage driver included) and in the hashing, the bytes read, the cache files done. */
+extern uint64_t cs_native4k_read_ticks, cs_native4k_hash_ticks, cs_native4k_bytes;
+extern unsigned long cs_native4k_ready_blobs, cs_native4k_full_blocks;
+
+static void
+evb10_emmc_stats_dump(void)
+{
+	uint64_t blocks = native_emmc_read_blocks, us = native_emmc_read_us;
+	uint64_t read_ns = 0, hash_ns = 0;
+
+	printf("evb10: emmc requests %llu failed %llu, host reads %llu, %llu blocks = %llu KiB in %llu ms (%llu KiB/s while reading), multi-block %u, dma %u (%llu blocks)\n",
+	    (unsigned long long)native_emmc_block_requests, (unsigned long long)native_emmc_block_failures,
+	    (unsigned long long)native_emmc_read_calls, (unsigned long long)blocks, (unsigned long long)(blocks / 2),
+	    (unsigned long long)(us / 1000), (unsigned long long)(us ? blocks * 512 * 1000000ull / 1024 / us : 0),
+	    (unsigned)native_emmc_multi_block, (unsigned)native_emmc_dma, (unsigned long long)native_emmc_dma_blocks);
+	if (native_emmc_data_persistent) {
+		uint64_t wblocks = native_emmc_write_blocks, wus = native_emmc_write_us;
+		printf("evb10: emmc writes %llu calls, %llu blocks = %llu KiB in %llu ms (%llu KiB/s while writing), %llu failed, %llu flushes\n",
+		    (unsigned long long)native_emmc_write_calls, (unsigned long long)wblocks, (unsigned long long)(wblocks / 2),
+		    (unsigned long long)(wus / 1000), (unsigned long long)(wus ? wblocks * 512 * 1000000ull / 1024 / wus : 0),
+		    (unsigned long long)native_emmc_write_failures, (unsigned long long)native_emmc_flush_calls);
+	}
+	absolutetime_to_nanoseconds(cs_native4k_read_ticks, &read_ns);
+	absolutetime_to_nanoseconds(cs_native4k_hash_ticks, &hash_ns);
+	printf("evb10: cs4k %lu cache files done, %lu blocks, %llu MiB read in %llu ms, hashed in %llu ms\n", cs_native4k_ready_blobs,
+	    cs_native4k_full_blocks, (unsigned long long)(cs_native4k_bytes >> 20), (unsigned long long)(read_ns / 1000000),
+	    (unsigned long long)(hash_ns / 1000000));
+}
+
+#define EVB10_PS_PIDS 128
+#define EVB10_PS_BUSY 4
+#define EVB10_PS_BURST 12
+static int evb10_prev_csw[EVB10_PS_PIDS];
+static int evb10_busy_pid[EVB10_PS_BUSY];
+static int evb10_busy_count;
+
+static int
+evb10_ps_one(proc_t p, void *arg)
+{
+	task_t task = proc_task(p);
+	struct timeval user = {0, 0}, sys = {0, 0}, idle = {0, 0};
+	task_events_info_data_t events = {0};
+	mach_msg_type_number_t count = TASK_EVENTS_INFO_COUNT;
+	int threads = 0, pid = proc_getpid(p);
+
+	(void) arg;
+	if (task != TASK_NULL) {
+		(void) task_info(task, TASK_EVENTS_INFO, (task_info_t)&events, &count);
+		threads = get_task_numacts(task);
+		calcru(p, &user, &sys, &idle);
+	}
+	printf("evb10: ps %3d %3d %c %3d %4ld.%03d %4ld.%03d msg %d/%d sys %d/%d csw %d flt %d %s\n", pid, proc_ppid(p),
+	    " IRSTZ"[(unsigned)p->p_stat < 6 ? (unsigned)p->p_stat : 0], threads, (long)user.tv_sec, (int)user.tv_usec / 1000, (long)sys.tv_sec,
+	    (int)sys.tv_usec / 1000, events.messages_sent, events.messages_received, events.syscalls_mach, events.syscalls_unix, events.csw,
+	    events.faults, p->p_name);
+	if (pid > 0) {
+		/* Every user process shows where its threads are; one that was switched thousands of times since the last
+		 * table is looked at again and again, right after the table. */
+		evb10_task_threads_dump(task, 0);
+		if (pid < EVB10_PS_PIDS) {
+			int delta = events.csw - evb10_prev_csw[pid];
+
+			evb10_prev_csw[pid] = events.csw;
+			if (delta > 2000 && evb10_busy_count < EVB10_PS_BUSY) {
+				evb10_busy_pid[evb10_busy_count++] = pid;
+			}
+		}
+	}
+	return PROC_RETURNED;
+}
+
+/*
+ * Where in the frame does a video port's post buffer run dry? Bit 4 of VPn_INT_RAW_STATUS is POST_BUF_EMPTY (the video port could not keep the
+ * interface fed: an underflow), bit 0 is FS (frame start); VP3 is the panel (raw 0xdc, clear 0xd4, scan line 0x6c bits 28:16), VP2 is the
+ * firmware's own HDMI0 (0xcc / 0xc4 / 0x68). The raw bits are sticky, so a poll loop of 300 ms reads the flag and the scan line, clears the flag
+ * and counts, per bucket of 64 lines, how many polls found it set. (A first version that printed the line of the first events only showed where
+ * the loop had started: the flag was set on a third to four fifths of all polls, wherever the beam was.)
+ * The sampler (evb10_ps_thread) does this once per table while evb10_vop_watch is set, so the numbers come with the load of every phase of the boot.
+ * (Bit numbers from the vendor kernel, rockchip_vop2_reg.c rk3568_vop_intrs: 0 FS, 1 FS_NEW, 2 LINE_FLAG, 3 LINE_FLAG1, 4 POST_BUF_EMPTY, 5 FS_FIELD,
+ * 6 DSP_HOLD_VALID.)
+ */
+extern uint64_t mach_absolute_time(void);
+extern void absolutetime_to_nanoseconds(uint64_t abstime, uint64_t *result);
+static volatile uint32_t *evb10_vop_base;   /* the VOP2 registers, set when the window is up */
+#define EVB10_VOP_BUCKETS 32
+static uint32_t evb10_vop_polls[2][EVB10_VOP_BUCKETS], evb10_vop_empty[2][EVB10_VOP_BUCKETS];
+
+static void
+evb10_vop_underflow_scan(void)
+{
+	volatile uint32_t *vop = evb10_vop_base;
+	/* [0] is VP3 (the panel), [1] is VP2 */
+	static const uint32_t raw_reg[2] = {0xdc, 0xcc}, clr_reg[2] = {0xd4, 0xc4}, line_reg[2] = {0x6c, 0x68};
+	unsigned fs[2] = {0, 0}, total[2] = {0, 0};
+	uint64_t t0, ns = 0;
+
+	if (vop == NULL) {
+		return;
+	}
+	memset(evb10_vop_polls, 0, sizeof(evb10_vop_polls));
+	memset(evb10_vop_empty, 0, sizeof(evb10_vop_empty));
+	vop[0xd4 / 4] = 0xffffffffU;
+	vop[0xc4 / 4] = 0xffffffffU;
+	t0 = mach_absolute_time();
+	do {
+		for (int port = 0; port < 2; port++) {
+			uint32_t raw = vop[raw_reg[port] / 4];
+			unsigned bucket = ((vop[line_reg[port] / 4] >> 16) & 0x1fff) >> 6;
+
+			if (bucket >= EVB10_VOP_BUCKETS) {
+				bucket = EVB10_VOP_BUCKETS - 1;
+			}
+			evb10_vop_polls[port][bucket]++;
+			if (raw & 0x11) {
+				vop[clr_reg[port] / 4] = ((raw & 0x11) << 16) | (raw & 0x11);
+				fs[port] += raw & 1;
+				if (raw & 0x10) {
+					evb10_vop_empty[port][bucket]++;
+					total[port]++;
+				}
+			}
+		}
+		absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
+	} while (ns < 300000000ULL);
+	printf("evb10: vop underflow scan %llu ms: vp3 frame starts %u, post-buffer-empty %u (esmart3 ctrl %08x); vp2 frame starts %u, post-buffer-empty %u\n",
+	    (unsigned long long)(ns / 1000000), fs[0], total[0], vop[0x1e10 / 4], fs[1], total[1]);
+	for (int port = 0; port < 2; port++) {
+		char row[EVB10_VOP_BUCKETS * 4 + 8];
+		size_t len = 0;
+
+		for (int b = 0; b < EVB10_VOP_BUCKETS; b++) {
+			unsigned pct = evb10_vop_polls[port][b] ? (unsigned)(evb10_vop_empty[port][b] * 100ull / evb10_vop_polls[port][b]) : 0;
+
+			len += snprintf(row + len, sizeof(row) - len, " %u", pct);
+		}
+		printf("evb10: vop underflow scan: vp%d %% of the polls that found POST_BUF_EMPTY set, per 64 lines (0..1951):%s\n", port == 0 ? 3 : 2, row);
+	}
+}
+
+/*
+ * What is on the panel, as text (evb10-shot=N: every N-th process table): the kernel's own frame buffer (what the VOP scans out, 32-bit BGRA)
+ * sampled on a COLS x ROWS grid. The luma becomes a character of a ramp, so a dark screen, a time and a wallpaper can be told apart from the
+ * serial log without anyone looking at the panel; the averages of the top, middle and bottom third give the colours.
+ */
+extern uint32_t evb10_fb_w, evb10_fb_h, evb10_fb_row;
+extern uintptr_t evb10_fb_kva;
+
+/*
+ * With evb10-vop-direct=1 the VOP reads the compositor's own surface (scattered pages behind its IOMMU), not the kernel's frame buffer, so the
+ * frame buffer would show a stale picture. The display driver sets this hook; it answers a byte offset of the frame that is on the panel now
+ * (0: the window is on the frame buffer, read that).
+ */
+int (*evb10_direct_pixel_hook)(uint64_t byte_offset, uint32_t *value);
+
+static inline uint32_t
+evb10_px_at(volatile uint32_t *px, uint64_t index)
+{
+	uint32_t value;
+
+	if (evb10_direct_pixel_hook != NULL && evb10_direct_pixel_hook(index * 4, &value)) {
+		return value;
+	}
+	return px[index];
+}
+
+static void
+evb10_screen_shot(void)
+{
+	enum { COLS = 36, ROWS = 32 };
+	static const char ramp[] = " .:-=+*#%@";
+	const uint32_t w = evb10_fb_w, h = evb10_fb_h, row = evb10_fb_row / 4;
+	volatile uint32_t *px = (volatile uint32_t *)evb10_fb_kva;
+	uint64_t sum[3][3] = { { 0 } };
+	uint32_t cells[3] = { 0, 0, 0 }, lit = 0;
+	char line[COLS + 1];
+
+	if (px == NULL || w == 0 || h == 0 || row < w) {
+		printf("evb10: shot: no frame buffer of its own\n");
+		return;
+	}
+	for (uint32_t r = 0; r < ROWS; r++) {
+		const uint32_t y = (uint32_t)(((uint64_t)r * h + h / 2) / ROWS), band = r * 3 / ROWS;
+
+		for (uint32_t c = 0; c < COLS; c++) {
+			const uint32_t x = (uint32_t)(((uint64_t)c * w + w / 2) / COLS), v = evb10_px_at(px, (uint64_t)y * row + x);
+			const uint32_t b = v & 0xff, g = (v >> 8) & 0xff, rd = (v >> 16) & 0xff, luma = (rd * 3 + g * 6 + b) / 10;
+
+			line[c] = ramp[luma * 10 / 256];
+			sum[band][0] += rd; sum[band][1] += g; sum[band][2] += b;
+			cells[band]++;
+			if (luma > 8) {
+				lit++;
+			}
+		}
+		line[COLS] = 0;
+		printf("evb10: shot %02u |%s|\n", r, line);
+	}
+	printf("evb10: shot %ux%u: %u of %u cells lit; average rgb top (%u,%u,%u) middle (%u,%u,%u) bottom (%u,%u,%u)\n", w, h, lit, (unsigned)(COLS * ROWS),
+	    (unsigned)(sum[0][0] / cells[0]), (unsigned)(sum[0][1] / cells[0]), (unsigned)(sum[0][2] / cells[0]),
+	    (unsigned)(sum[1][0] / cells[1]), (unsigned)(sum[1][1] / cells[1]), (unsigned)(sum[1][2] / cells[1]),
+	    (unsigned)(sum[2][0] / cells[2]), (unsigned)(sum[2][1] / cells[2]), (unsigned)(sum[2][2] / cells[2]));
+}
+
+/*
+ * A real screenshot over the serial line (evb10-shot-img=N: every N-th process table): the frame buffer reduced 4:1 (the mean of four pixels in
+ * every 4x4 block), RGB565, base64, in chunks of 60 pixels, one "evb10: img SEQ Y X BASE64" line each. xnu-probe/shot2png.py puts the lines of a log
+ * back together into a PNG. A kernel console line is cut after ~250 characters, hence the short chunks; a chunk that was lost leaves a hole.
+ */
+static void
+evb10_screen_image(uint32_t seq)
+{
+	enum { CHUNK = 60 };
+	/* evb10-shot-scale=1|2|4 (default 4: 1/16 of the pixels); evb10-shot-y=Y0 evb10-shot-rows=N send only rows Y0.. of the reduced picture (the rest stays black) */
+	static uint32_t scale_arg, y0_arg, rows_arg;
+	static int args_read;
+	if (!args_read) {
+		args_read = 1;
+		(void) PE_parse_boot_argn("evb10-shot-scale", &scale_arg, sizeof(scale_arg));
+		(void) PE_parse_boot_argn("evb10-shot-y", &y0_arg, sizeof(y0_arg));
+		(void) PE_parse_boot_argn("evb10-shot-rows", &rows_arg, sizeof(rows_arg));
+	}
+	const uint32_t SCALE = (scale_arg == 1 || scale_arg == 2) ? scale_arg : 4;
+	const uint32_t dsx = (SCALE >= 2) ? 1 : 0, off = (SCALE >= 4) ? 1 : 0;
+	static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	const uint32_t w = evb10_fb_w, h = evb10_fb_h, row = evb10_fb_row / 4;
+	volatile uint32_t *px = (volatile uint32_t *)evb10_fb_kva;
+	const uint32_t ow = w / SCALE, oh = h / SCALE;
+	char line[CHUNK * 2 * 4 / 3 + 8];
+
+	if (px == NULL || w == 0 || h == 0 || row < w) {
+		return;
+	}
+	printf("evb10: img begin %u %u %u\n", seq, ow, oh);
+	for (uint32_t y = (y0_arg < oh) ? y0_arg : 0; y < oh && (rows_arg == 0 || y < y0_arg + rows_arg); y++) {
+		for (uint32_t x0 = 0; x0 < ow; x0 += CHUNK) {
+			uint8_t bytes[CHUNK * 2 + 2];
+			uint32_t n = (ow - x0 < CHUNK) ? (ow - x0) : CHUNK, nb = n * 2, at = 0;
+
+			for (uint32_t i = 0; i < n; i++) {
+				const uint32_t sx = (x0 + i) * SCALE + off, sy = y * SCALE + off;
+				const uint32_t a = evb10_px_at(px, (uint64_t)sy * row + sx), b = evb10_px_at(px, (uint64_t)sy * row + sx + dsx);
+				const uint32_t c = evb10_px_at(px, (uint64_t)(sy + dsx) * row + sx), d = evb10_px_at(px, (uint64_t)(sy + dsx) * row + sx + dsx);
+				const uint32_t r = (((a >> 16) & 0xff) + ((b >> 16) & 0xff) + ((c >> 16) & 0xff) + ((d >> 16) & 0xff)) >> 2;
+				const uint32_t g = (((a >> 8) & 0xff) + ((b >> 8) & 0xff) + ((c >> 8) & 0xff) + ((d >> 8) & 0xff)) >> 2;
+				const uint32_t bl = ((a & 0xff) + (b & 0xff) + (c & 0xff) + (d & 0xff)) >> 2;
+				const uint32_t v = ((r >> 3) << 11) | ((g >> 2) << 5) | (bl >> 3);
+
+				bytes[2 * i] = (uint8_t)(v >> 8);
+				bytes[2 * i + 1] = (uint8_t)v;
+			}
+			for (uint32_t i = 0; i < nb; i += 3) {
+				const uint32_t b0 = bytes[i], b1 = (i + 1 < nb) ? bytes[i + 1] : 0, b2 = (i + 2 < nb) ? bytes[i + 2] : 0;
+
+				line[at++] = b64[b0 >> 2];
+				line[at++] = b64[((b0 & 3) << 4) | (b1 >> 4)];
+				line[at++] = (i + 1 < nb) ? b64[((b1 & 15) << 2) | (b2 >> 6)] : '=';
+				line[at++] = (i + 2 < nb) ? b64[b2 & 63] : '=';
+			}
+			line[at] = 0;
+			printf("evb10: img %u %u %u %s\n", seq, y, x0, line);
+		}
+	}
+	printf("evb10: img end %u\n", seq);
+}
+
+static void
+evb10_ps_thread(void *arg, wait_result_t wait_result)
+{
+	uint32_t interval = (uint32_t)(uintptr_t)arg, seconds = 900, shot = 0, shot_img = 0, tables = 0, img_seq = 0;
+
+	(void) wait_result;
+	(void) PE_parse_boot_argn("evb10-ps-secs", &seconds, sizeof(seconds));
+	(void) PE_parse_boot_argn("evb10-shot", &shot, sizeof(shot));
+	(void) PE_parse_boot_argn("evb10-shot-img", &shot_img, sizeof(shot_img));
+	for (uint32_t elapsed = 0; elapsed < seconds; elapsed += interval) {
+		delay_for_interval(interval, NSEC_PER_SEC);
+		printf("evb10: ps t+%us   pid ppid S thr  user       sys       counters\n", elapsed + interval);
+		evb10_busy_count = 0;
+		proc_iterate(PROC_ALLPROCLIST, evb10_ps_one, NULL, NULL, NULL);
+		evb10_cpu_stats_dump();
+		evb10_emmc_stats_dump();
+		evb10_vop_underflow_scan();
+		++tables;
+		if (shot && (tables % shot) == 0) {
+			evb10_screen_shot();
+		}
+		if (shot_img && (tables % shot_img) == 0) {
+			evb10_screen_image(img_seq++);
+		}
+		for (int i = 0; i < evb10_busy_count; i++) {
+			proc_t busy = proc_find(evb10_busy_pid[i]);
+
+			if (busy == PROC_NULL) {
+				continue;
+			}
+			printf("evb10: ps: pid %d switched a lot since the last table, %d samples 25 ms apart\n", evb10_busy_pid[i], EVB10_PS_BURST);
+			for (int sample = 1; sample <= EVB10_PS_BURST; sample++) {
+				delay_for_interval(25, NSEC_PER_MSEC);
+				evb10_task_threads_dump(proc_task(busy), sample);
+			}
+			evb10_cpu_stats_dump();
+			evb10_emmc_stats_dump();
+			proc_rele(busy);
+		}
+	}
+	printf("evb10: ps: %u s are over, no more tables\n", seconds);
+}
+
+/*
+ * A process that dies of a bug of its own leaves nothing on the console (its stderr and its os_log go to logd, and
+ * the core file fails with ENOENT): xnu-probe/runs/emmc5j had watchdogd, liveactivitiesd and SpringBoard going
+ * down with SIGTRAP again and again and no way to tell where. So when a process is terminated by a signal that
+ * means "its own fault", the registers of the trap and the frame-pointer chain of its user stack are printed:
+ * the PC and the return addresses are addresses of the dyld shared cache, which a host can say the names of.
+ */
+extern int evb10_user_context(thread_t thread, uint64_t out[10]);
+extern int evb10_shared_region(task_t task, uint64_t out[3]);
+
+static void
+evb10_crash_site(proc_t p, int sig)
+{
+	uint64_t ctx[10], frame[2], chain[20], sr[3] = { 0, 0, 0 };
+	uint64_t fp;
+	unsigned depth = 0, i;
+	char line[1024];
+	size_t n;
+
+	if (p != current_proc() || evb10_user_context(current_thread(), ctx) != 0) {
+		return;
+	}
+	for (fp = ctx[3]; depth < 20 && fp != 0 && (fp & 7) == 0 && copyin((user_addr_t)fp, frame, sizeof(frame)) == 0; fp = frame[0]) {
+		chain[depth++] = frame[1];
+		if (frame[0] <= fp) {
+			break;
+		}
+	}
+	(void)evb10_shared_region(proc_task(p), sr);
+	/* One buffer, one printf per line: the pieces of a line printed one by one are interleaved with the lines of other threads,
+	 * and the console drops the tail of a line longer than ~250 characters, so the frames come in lines of eight (gpu33: the
+	 * single line lost the cache slide and everything after the eighth frame). */
+	snprintf(line, sizeof(line),
+	    "evb10: crash pid %d (%s) sig %d pc %#llx lr %#llx sp %#llx fp %#llx x0 %#llx x1 %#llx x16 %#llx esr %#llx far %#llx slide %#llx base %#llx",
+	    proc_getpid(p), p->p_name, sig, (unsigned long long)ctx[0], (unsigned long long)ctx[1], (unsigned long long)ctx[2],
+	    (unsigned long long)ctx[3], (unsigned long long)ctx[4], (unsigned long long)ctx[5], (unsigned long long)ctx[7],
+	    (unsigned long long)ctx[8], (unsigned long long)ctx[9], (unsigned long long)sr[2], (unsigned long long)sr[0]);
+	printf("%s\n", line);
+	for (i = 0; i < depth; i += 8) {
+		unsigned k;
+		n = snprintf(line, sizeof(line), "evb10: crash pid %d up %u:", proc_getpid(p), i);
+		for (k = i; k < depth && k < i + 8; k++) {
+			n += snprintf(line + n, sizeof(line) - n, " %#llx", (unsigned long long)chain[k]);
+		}
+		printf("%s\n", line);
+	}
+}
+
+/* Called from exit_with_reason() (evb10-exit-trace.patch) just before the process is torn down. */
+void evb10_exit_trace(proc_t p, int rv);
+
+void
+evb10_exit_trace(proc_t p, int rv)
+{
+	if (!evb10_trace_exits) {
+		return;
+	}
+	os_reason_t reason = p->p_exit_reason;
+	char *description = reason != OS_REASON_NULL ? exit_reason_get_string_desc(reason) : NULL;
+
+	printf("evb10: exit pid %d ppid %d (%s) status 0x%x signal %d code %d reason %u/0x%llx %.120s\n", proc_getpid(p), proc_ppid(p),
+	    p->p_name, (unsigned)rv, WTERMSIG(rv), WEXITSTATUS(rv), reason != OS_REASON_NULL ? (unsigned)reason->osr_namespace : 0u,
+	    reason != OS_REASON_NULL ? (unsigned long long)reason->osr_code : 0ull, description ? description : "");
+	switch (WTERMSIG(rv)) {
+	case SIGILL:
+	case SIGTRAP:
+	case SIGABRT:
+	case SIGFPE:
+	case SIGBUS:
+	case SIGSEGV:
+	case SIGSYS:
+		evb10_crash_site(p, WTERMSIG(rv));
+		break;
+	default:
+		break;
+	}
+}
+
+/*
+ * evb10-vop=1: what the firmware left in the display controller (VOP2 of the RK3588, 0xfdd90000), so that
+ * the display port starts from facts: is the panel's video port (VP3) still running, which window feeds it,
+ * from where. Reads only, and only this block: the firmware's own Vop2Dxe has its power domain and clocks on.
+ */
+extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+
+static void
+evb10_vop_dump(void)
+{
+	static const struct {
+		uint32_t from, to;
+		const char *name;
+	} ranges[] = {
+		{ 0x000, 0x080, "sys" },
+		{ 0x600, 0x680, "ovl" },
+		{ 0x6e0, 0x700, "ovl-dly" },
+		{ 0xc00, 0xc80, "vp0" },
+		{ 0xd00, 0xd80, "vp1" },
+		{ 0xe00, 0xe80, "vp2" },
+		{ 0xf00, 0xf80, "vp3" },
+		{ 0x1800, 0x1830, "esmart0" },
+		{ 0x1a00, 0x1a30, "esmart1" },
+		{ 0x1c00, 0x1c60, "esmart2" },
+		{ 0x1e00, 0x1e60, "esmart3" },
+	};
+	volatile uint32_t *vop = (volatile uint32_t *)ml_io_map(0xfdd90000UL, 0x10000);
+
+	if (vop == NULL) {
+		printf("evb10: vop: cannot map the VOP2 registers\n");
+		return;
+	}
+	for (unsigned r = 0; r < sizeof(ranges) / sizeof(ranges[0]); r++) {
+		for (uint32_t off = ranges[r].from; off < ranges[r].to; off += 16) {
+			uint32_t w0 = vop[off / 4], w1 = vop[off / 4 + 1], w2 = vop[off / 4 + 2], w3 = vop[off / 4 + 3];
+
+			printf("evb10: vop %-7s %#06x: %08x %08x %08x %08x\n", ranges[r].name, off, w0, w1, w2, w3);
+		}
+	}
+}
+
+/*
+ * Is the panel meant to be lit at all: the pins and the PWM the board's device tree names for it. LCD power is
+ * GPIO2_C1 (pin 17, active high), the panel reset GPIO0_D3 (pin 27, active low) and the backlight is PWM1.
+ * RK3588 GPIO v2 banks: DR_L 0x00 / DR_H 0x04 (output level, pins 0-15 / 16-31, upper half = write mask),
+ * DDR_L 0x08 / DDR_H 0x0c (direction), EXT_PORT 0x70 (what the pin reads). PWM v2: COUNTER 0x0, PERIOD 0x4,
+ * DUTY 0x8, CTRL 0xc (bit 0 = enable); PWM1 is the second 16 bytes. Only reads, of blocks the boot firmware
+ * (U-Boot lit this panel) has clocked.
+ */
+static void
+evb10_panel_pins_dump(void)
+{
+	static const struct {
+		uintptr_t phys;
+		uint32_t to;
+		const char *name;
+	} blocks[] = {
+		{ 0xfd8b0000UL, 0x40, "pwm0-3" },
+		{ 0xfd8a0000UL, 0x80, "gpio0" },
+		{ 0xfec30000UL, 0x80, "gpio2" },
+	};
+
+	for (unsigned b = 0; b < sizeof(blocks) / sizeof(blocks[0]); b++) {
+		volatile uint32_t *regs = (volatile uint32_t *)ml_io_map(blocks[b].phys, 0x1000);
+
+		if (regs == NULL) {
+			printf("evb10: panel: cannot map %s\n", blocks[b].name);
+			continue;
+		}
+		for (uint32_t off = 0; off < blocks[b].to; off += 16) {
+			printf("evb10: panel %-6s %#06x: %08x %08x %08x %08x\n", blocks[b].name, off, regs[off / 4], regs[off / 4 + 1],
+			    regs[off / 4 + 2], regs[off / 4 + 3]);
+		}
+	}
+}
+
+/*
+ * Waits by the kernel's own clock (mach_absolute_time()).
+ *
+ * The first display experiments (emmc5r/emmc5s) spun on CNTVCT_EL0 for "CNTFRQ_EL0 / 1000 * ms" ticks and every one of those waits
+ * returned at once: the window registers were read back microseconds after the commit, the VP3 "frame counter" three reads in a row,
+ * and the 48 "100 us apart" scope samples were 0.7 us apart. Not the counters' fault (CNTFRQ_EL0 is 24 MHz on all eight cores, A55
+ * and A76): inline asm on this target goes through the DARWIN assembler, where ';' starts a COMMENT. "isb; mrs %0, cntvct_el0" was
+ * assembled to just "isb", the output register was never written, and the loop compared whatever the register happened to hold
+ * (llvm-objdump of the kernel shows no mrs at all; xnu-probe/runs/emmc5v: raw counters that "run" at 997 MHz). Separate the
+ * instructions of one __asm__ statement with "\n\t", or use one statement per instruction. (The same typo is in the stock
+ * UniXNU/drivers/ArmCpu/ArmCpu.cpp: signalCPU() never wrote ICC_SGI1R_EL1, see UniXNU-rk3588-common scripts/data/ArmCpu-rk3588-sep-asm.patch.)
+ */
+extern uint64_t mach_absolute_time(void);
+extern void absolutetime_to_nanoseconds(uint64_t abstime, uint64_t *result);
+extern int cpu_number(void);
+
+static inline uint64_t
+evb10_vop_cntvct(void)
+{
+	uint64_t v;
+
+	__asm__ volatile ("isb\n\tmrs %0, cntvct_el0" : "=r" (v) :: "memory");
+	return v;
+}
+
+static inline uint64_t
+evb10_vop_cntpct(void)
+{
+	uint64_t v;
+
+	__asm__ volatile ("isb\n\tmrs %0, cntpct_el0" : "=r" (v) :: "memory");
+	return v;
+}
+
+static void
+evb10_vop_wait_us(unsigned us)
+{
+	uint64_t t0 = mach_absolute_time(), t, ns;
+
+	do {
+		t = mach_absolute_time();
+		absolutetime_to_nanoseconds(t - t0, &ns);
+	} while (ns < (uint64_t)us * 1000);
+}
+
+static void
+evb10_vop_wait_ms(unsigned ms)
+{
+	evb10_vop_wait_us(ms * 1000);
+}
+
+/*
+ * What CNTFRQ_EL0 and the two counters do on the CPU that runs the display experiment, against the kernel's clock: over 1 ms of
+ * mach time both counters must advance by CNTFRQ_EL0 / 1000 ticks (24000), and their difference is this core's CNTVOFF_EL2.
+ * (The thread is not pinned: if it changed cores in between, the two cpu numbers differ and the deltas mean nothing.)
+ */
+static void
+evb10_vop_clock_check(void)
+{
+	uint64_t frq, v0, v1, p0, p1, m0, m1, ns;
+	int cpu0, cpu1;
+
+	cpu0 = cpu_number();
+	__asm__ volatile ("mrs %0, cntfrq_el0" : "=r" (frq));
+	v0 = evb10_vop_cntvct();
+	p0 = evb10_vop_cntpct();
+	m0 = mach_absolute_time();
+	evb10_vop_wait_us(1000);
+	v1 = evb10_vop_cntvct();
+	p1 = evb10_vop_cntpct();
+	m1 = mach_absolute_time();
+	cpu1 = cpu_number();
+	absolutetime_to_nanoseconds(m1 - m0, &ns);
+	printf("evb10: vop: clocks on cpu %d -> %d: cntfrq_el0 %llu; in %llu ns of mach time cntvct +%llu cntpct +%llu mach +%llu; cntpct - cntvct %lld\n",
+	    cpu0, cpu1, (unsigned long long)frq, (unsigned long long)ns, (unsigned long long)(v1 - v0),
+	    (unsigned long long)(p1 - p0), (unsigned long long)(m1 - m0), (long long)(p1 - v1));
+}
+
+/*
+ * Why the display controller does not take what the kernel writes (emmc5r: "not latched" twice, with the exact recipe that
+ * worked from the U-Boot prompt): is the pixel clock of the panel's video port running? The firmware that ran in between
+ * (the UEFI's Vop2Dxe) sets the shared video PLL V0PLL for its own HDMI port and writes CRU_MODE_CON00. The clock unit is
+ * read here, raw: the PLLs V0PLL, AUPLL, CPLL, GPLL (CON0..CON6 = 0x160, 0x180, 0x1a0, 0x1c0 + 4 * n; CON6 bit 15 is the
+ * lock), CRU_MODE_CON00 (0x280, two bits per PLL: NPLL 1:0, GPLL 3:2, V0PLL 5:4, AUPLL 7:6, CPLL 9:8, 1 = running),
+ * CLKSEL_CON108..114 (0x4b0 ..; 111..113 select source and divider of DCLK_VOP0..3: source in bits 8:7 of 113 (0 GPLL,
+ * 1 CPLL, 2 V0PLL, 3 AUPLL), divider in bits 6:0, minus one) and CLKGATE_CON50..54 (0x8c8 ..; a set bit gates a clock).
+ */
+static void
+evb10_cru_dump(void)
+{
+	static const struct {
+		uint32_t off;
+		const char *name;
+	} plls[] = { { 0x160, "v0pll" }, { 0x180, "aupll" }, { 0x1a0, "cpll" }, { 0x1c0, "gpll" } };
+	volatile uint32_t *cru = (volatile uint32_t *)ml_io_map(0xfd7c0000UL, 0x1000);
+
+	if (cru == NULL) {
+		printf("evb10: cru: cannot map the clock unit\n");
+		return;
+	}
+	for (unsigned i = 0; i < sizeof(plls) / sizeof(plls[0]); i++) {
+		const uint32_t o = plls[i].off / 4;
+
+		printf("evb10: cru %-5s con0-6: %08x %08x %08x %08x %08x %08x %08x\n", plls[i].name, cru[o], cru[o + 1], cru[o + 2], cru[o + 3],
+		    cru[o + 4], cru[o + 5], cru[o + 6]);
+	}
+	printf("evb10: cru mode_con00 %08x | clksel108-114: %08x %08x %08x %08x %08x %08x %08x | clkgate50-54: %08x %08x %08x %08x %08x\n",
+	    cru[0x280 / 4], cru[0x4b0 / 4], cru[0x4b4 / 4], cru[0x4b8 / 4], cru[0x4bc / 4], cru[0x4c0 / 4], cru[0x4c4 / 4], cru[0x4c8 / 4],
+	    cru[0x8c8 / 4], cru[0x8cc / 4], cru[0x8d0 / 4], cru[0x8d4 / 4], cru[0x8d8 / 4]);
+}
+
+/*
+ * A look at the registers that move while a port scans out. SYS_STATUS1..3 (0x64, 0x68, 0x6c) change from read to read
+ * (emmc5r: 0x6c bits 28:16 read 1337, 501, 501, 501, 651, 950 ...); they look like the current scan line of the ports,
+ * not a frame counter: a line is 1129 clocks of the panel's port (VP3, 1129 x 1952) and 800 of VP2's. 48 reads, 100 us
+ * apart, before anything is written and again after the window writes; the port's interrupt status is cleared first and
+ * read at the end (any raw bit set in between = the port produced frames or lines in that time).
+ */
+static void
+evb10_vop_scope(volatile uint32_t *vop, const char *when)
+{
+	uint32_t s64[48], s68[48], s6c[48];
+
+	vop[0xd4 / 4] = 0xffffffff;
+	__asm__ volatile ("dsb sy" ::: "memory");
+	for (int i = 0; i < 48; i++) {
+		s64[i] = vop[0x64 / 4];
+		s68[i] = vop[0x68 / 4];
+		s6c[i] = vop[0x6c / 4];
+		evb10_vop_wait_us(100);
+	}
+	printf("evb10: vop scope %s: VP3 int en %08x status %08x raw %08x (cleared 4.8 ms ago)\n", when, vop[0xd0 / 4], vop[0xd8 / 4], vop[0xdc / 4]);
+	printf("evb10: vop scope %s: 0x64 lo/hi:", when);
+	for (int i = 0; i < 48; i++) {
+		printf(" %u/%u", s64[i] & 0x1fff, (s64[i] >> 16) & 0x1fff);
+	}
+	printf("\nevb10: vop scope %s: 0x68 lo/hi:", when);
+	for (int i = 0; i < 48; i++) {
+		printf(" %u/%u", s68[i] & 0x1fff, (s68[i] >> 16) & 0x1fff);
+	}
+	printf("\nevb10: vop scope %s: 0x6c lo/hi:", when);
+	for (int i = 0; i < 48; i++) {
+		printf(" %u/%u", s6c[i] & 0x1fff, (s6c[i] >> 16) & 0x1fff);
+	}
+	printf("\n");
+}
+
+/*
+ * evb10-vop=2: show the framebuffer the firmware gave the kernel (the GOP surface, 640x480 ARGB) on the DSI panel.
+ * The panel's video port is VP3 and U-Boot feeds it through the smart window Esmart3 (window registers at 0x1e00:
+ * CTRL 0x10 bit 0 = on, YRGB_MST 0x14 = surface address, VIR 0x1c = stride in words, ACT_INFO 0x20 = source size,
+ * DSP_INFO 0x24 = size on the screen, both ((h - 1) << 16) | (w - 1), DSP_ST 0x28 = ((y << 16) | x) from the
+ * corner of the panel's active area). Only the window changes: the panel timing, the DSI link, the layer mixer and
+ * the port assignment stay as U-Boot left them, so what is shown is exactly what the kernel's console draws.
+ *
+ * What is known from the sweet port on this very board (3588/pitfalls.md 117, 118, 133) and U-Boot's own VOP2 driver
+ * (u-boot/drivers/video/drm/rockchip_vop2.c): the window registers are double buffered, a read returns the ACTIVE set,
+ * a write lands in a shadow set that takes effect at the next frame after REG_CFG_DONE (0x0) is written with
+ * GLB_CFG_DONE_EN (bit 15) | the port's bit | the port's write-enable (bit 19 for VP3, = 0x00088008); the port bit
+ * itself does not read back as cleared, so only the active registers tell whether it latched. The recipe that worked
+ * 100 % from the U-Boot prompt: window off, 0x8000, geometry one register at a time, window on, 0x00088008.
+ * Bits 28:16 of 0x6c are the port's CURRENT SCAN LINE (0..1951), not a frame counter (emmc5s scope: 1080..1084 over 34 us, a
+ * line being 8.55 us at 132 MHz); 0x68 is VP2's (1 line = 31.7 us). It does not move when nothing is scanning out.
+ */
+static uint32_t
+evb10_vop_frames(volatile uint32_t *vop)
+{
+	return (vop[0x6c / 4] >> 16) & 0x1fff;
+}
+
+static void
+evb10_vop_put(volatile uint32_t *vop, uint32_t off, uint32_t value)
+{
+	vop[off / 4] = value;
+	__asm__ volatile ("dsb sy" ::: "memory");
+}
+
+/* DSP_BG of VP3 (0xf2c): 10 bits each, red 29:20, green 19:10, blue 9:0. A dark blue, 0x180 of 0x3ff. */
+#define EVB10_VOP_BG_BLUE 0x00000180U
+
+/*
+ * REG_CFG_DONE written, then read at 0 us, 100 us, 1 ms, 5 ms, 20 ms and 60 ms (a frame of the panel's port is 16.7 ms): does the
+ * port's bit stay, does it clear when the port takes the registers, does anything read back at all. 60 ms after, the caller reads
+ * the window.
+ */
+static void
+evb10_vop_commit(volatile uint32_t *vop, uint32_t value, const char *what)
+{
+	static const unsigned at_us[6] = { 0, 100, 1000, 5000, 20000, 60000 };
+	uint32_t seen[6];
+	uint64_t t0, t, ns;
+
+	t0 = mach_absolute_time();
+	evb10_vop_put(vop, 0x0, value);
+	for (int i = 0; i < 6; i++) {
+		do {
+			t = mach_absolute_time();
+			absolutetime_to_nanoseconds(t - t0, &ns);
+		} while (ns < (uint64_t)at_us[i] * 1000);
+		seen[i] = vop[0];
+	}
+	printf("evb10: vop: %s: wrote cfg_done %08x, read back after 0 us %08x, 100 us %08x, 1 ms %08x, 5 ms %08x, 20 ms %08x, 60 ms %08x\n",
+	    what, value, seen[0], seen[1], seen[2], seen[3], seen[4], seen[5]);
+}
+
+static bool
+evb10_vop_window_is(volatile uint32_t *vop, uint32_t fb, uint32_t vir, uint32_t act, uint32_t st)
+{
+	return (vop[0x1e10 / 4] & 1) && vop[0x1e14 / 4] == fb && vop[0x1e1c / 4] == vir && vop[0x1e20 / 4] == act &&
+	       vop[0x1e24 / 4] == act && vop[0x1e28 / 4] == st;
+}
+
+/* evb10-fb-w/-h: a frame buffer of the kernel's own (package/LegacyDisplayProbe.cpp, evb10_fb_override); zero while there is none.
+ * PE_state is read-only after lockdown, so the replacement is not written into it. */
+extern uint64_t evb10_fb_base;
+extern uint32_t evb10_fb_w, evb10_fb_h, evb10_fb_row;
+extern uintptr_t evb10_fb_kva;
+uint64_t evb10_fb_base;
+uint32_t evb10_fb_w, evb10_fb_h, evb10_fb_row;
+uintptr_t evb10_fb_kva;   /* the kernel's own mapping of it (a 8 MB ml_io_map does not fit the I/O VA range: touch2 panicked in kmem_alloc) */
+
+/*
+ * Something the eye cannot mistake, drawn into the surface the panel now scans: a white frame around the 640x480 window and, along
+ * the top, four bars (red, green, blue, white; every pixel opaque, so that neither a straight nor a pre-multiplied alpha blend of the
+ * layer can hide it). The console text of vc_mirror=1 goes below; if the text shows but the bars are the wrong colours, the
+ * window's channel order is the thing to change, if nothing shows, the window never latched.
+ */
+static void
+evb10_vop_test_pattern(uint64_t fb, uint32_t w, uint32_t h, uint32_t bytes)
+{
+	volatile uint32_t *px = (evb10_fb_base != 0 && fb == evb10_fb_base && evb10_fb_kva != 0)
+	    ? (volatile uint32_t *)evb10_fb_kva : (volatile uint32_t *)ml_io_map((vm_offset_t)fb, (vm_size_t)bytes * h);
+	const uint32_t bars[4] = { 0xffff0000, 0xff00ff00, 0xff0000ff, 0xffffffff };
+	const uint32_t row = bytes / 4;
+
+	if (px == NULL) {
+		printf("evb10: vop: cannot map the framebuffer to draw the test pattern\n");
+		return;
+	}
+	for (uint32_t y = 0; y < 64 && y < h; y++) {
+		for (uint32_t x = 0; x < w; x++) {
+			px[y * row + x] = bars[(x * 4) / w];
+		}
+	}
+	for (uint32_t y = 0; y < h; y++) {
+		for (uint32_t x = 0; x < w; x++) {
+			if (y < 3 || y >= h - 3 || x < 3 || x >= w - 3) {
+				px[y * row + x] = 0xffffffff;
+			}
+		}
+	}
+	__asm__ volatile ("dsb sy" ::: "memory");
+	printf("evb10: vop: test pattern drawn (frame + 4 bars of 64 rows in the top of the %ux%u surface)\n", w, h);
+}
+
+/*
+ * Which video port a window belongs to is the layer mixer's business (OVL_LAYER_SEL 0x604, OVL_PORT_SEL 0x608; with OVL_CTRL bit 28
+ * set a write takes effect at once), and a window's registers are latched by the CFG_DONE bit of THAT port. emmc5t, with real
+ * waits: the commit of VP3 (bit 3) was taken and the Esmart3 registers did not change at all - and the dump had it: the mixer
+ * the firmware's Vop2Dxe left is OVL_LAYER_SEL 0x76543210 / OVL_PORT_SEL 0xa5a47738 (port muxes 8 / 3 / 7 / 7: VP0 no layer, VP1
+ * slots 0-3, VP2 slots 4-7, VP3 none; windows Cluster2/3, Esmart2/3 on VP2). Vop2Dxe sets the "two display" policy for the two
+ * ports it drives (HDMI), so U-Boot's window of the panel, Esmart3, now sits on VP2 (HDMI0, nobody there) and VP3 - the DSI
+ * panel's port, still scanning, still timed - mixes no window at all: a black panel, and VP3's commit latches nothing of it.
+ * What U-Boot itself had set (3588/logs: OVL_PORT_SEL 0xe4e47531 with the Android U-Boot of this board) is its "four display"
+ * policy (rockchip_vop2.c rk3588 vp_plane_mask): VP0 = Cluster0 + Esmart0, VP1 = Cluster1 + Esmart1, VP2 = Cluster2 + Esmart2,
+ * VP3 = Cluster3 + Esmart3. LAYER_SEL then lists the windows by port (OVL_LAYER_SEL nibble of Cluster0 0, Cluster1 1, Esmart0 2,
+ * Esmart1 3, Cluster2 4, Cluster3 5, Esmart2 6, Esmart3 7): 0, 2, 1, 3, 4, 6, 5, 7 = 0x75643120; PORT_SEL: window-to-port
+ * 2 bits per window in the order Cluster0..3, Esmart0..3 (0 1 2 3 0 1 2 3 = 0xe4e4 in the upper half), port muxes (last layer
+ * slot of each port) 1 / 3 / 5 / 7 in the lower. Esmart2 (the GOP surface the firmware's HDMI port shows) stays on VP2.
+ */
+#define EVB10_VOP_LAYER_SEL_4VP 0x75643120U
+#define EVB10_VOP_PORT_SEL_4VP  0xe4e47531U
+
+static void
+evb10_vop_layer_mixer_dump(volatile uint32_t *vop, const char *when)
+{
+	printf("evb10: vop: layer mixer %s: ovl_ctrl %08x layer_sel %08x port_sel %08x | bg_mix vp0-3 %08x %08x %08x %08x | dly cluster %08x %08x smart %08x\n",
+	    when, vop[0x600 / 4], vop[0x604 / 4], vop[0x608 / 4], vop[0x6e0 / 4], vop[0x6e4 / 4], vop[0x6e8 / 4], vop[0x6ec / 4],
+	    vop[0x6f0 / 4], vop[0x6f4 / 4], vop[0x6f8 / 4]);
+}
+
+static void
+evb10_vop_remap_layers(volatile uint32_t *vop)
+{
+	evb10_vop_layer_mixer_dump(vop, "firmware's");
+	if (vop[0x604 / 4] == EVB10_VOP_LAYER_SEL_4VP && vop[0x608 / 4] == EVB10_VOP_PORT_SEL_4VP) {
+		printf("evb10: vop: layer mixer already has a window on every port\n");
+		return;
+	}
+	evb10_vop_put(vop, 0x604, EVB10_VOP_LAYER_SEL_4VP);
+	evb10_vop_put(vop, 0x608, EVB10_VOP_PORT_SEL_4VP);
+	evb10_vop_wait_ms(40);
+	evb10_vop_layer_mixer_dump(vop, "U-Boot's four-display");
+}
+
+/* evb10-vop=3 shows only the background (no window): does the panel flicker without any fetch from memory? */
+extern volatile uint32_t evb10_vop_watch;
+
+static int evb10_vop_es2;   /* evb10-vop-es2: 1 Esmart2 off, 2 Esmart2 gets its own AXI ids */
+
+static void
+evb10_vop_show_gop(volatile uint32_t *vop, bool window)
+{
+	const bool own = evb10_fb_base != 0;
+	const uint64_t fb = own ? evb10_fb_base : PE_state.video.v_baseAddr;
+	const uint32_t w = own ? evb10_fb_w : (uint32_t)PE_state.video.v_width;
+	const uint32_t h = own ? evb10_fb_h : (uint32_t)PE_state.video.v_height;
+	const uint32_t bytes = own ? evb10_fb_row : (uint32_t)PE_state.video.v_rowBytes;
+	const uint32_t panel_w = 1080, panel_h = 1920;
+	const uint32_t commit = 0x00088008U;
+	uint32_t x, y, vir, act, st, f[3];
+
+	printf("evb10: vop: kernel framebuffer %#llx %ux%u row %u bytes depth %lu\n", fb, w, h, bytes,
+	    (unsigned long)PE_state.video.v_depth);
+	if (fb == 0 || fb >= 0x100000000ULL || w == 0 || h == 0 || w > panel_w || h > panel_h || bytes < w * 4 || (bytes & 3) != 0) {
+		printf("evb10: vop: no usable framebuffer, window left alone\n");
+		return;
+	}
+	x = (panel_w - w) / 2;
+	y = (panel_h - h) / 2;
+	vir = bytes / 4;
+	act = ((h - 1) << 16) | (w - 1);
+	st = (y << 16) | x;
+
+	evb10_vop_test_pattern(fb, w, h, bytes);
+	evb10_vop_clock_check();
+	f[0] = evb10_vop_frames(vop);
+	evb10_vop_wait_ms(25);
+	f[1] = evb10_vop_frames(vop);
+	evb10_vop_wait_ms(25);
+	f[2] = evb10_vop_frames(vop);
+	printf("evb10: vop: VP3 scan line %u %u %u 25 ms apart (%s), sys 0x60 %08x 0x68 %08x 0x6c %08x\n", f[0], f[1], f[2],
+	    (f[0] != f[1] || f[1] != f[2]) ? "scanning" : "NOT moving", vop[0x60 / 4], vop[0x68 / 4], vop[0x6c / 4]);
+
+	/* A window on the panel's port, then a background the eye cannot mistake for the black of a panel that shows nothing. */
+	evb10_vop_remap_layers(vop);
+	evb10_vop_put(vop, 0xf2c, EVB10_VOP_BG_BLUE);
+	if (evb10_vop_es2 == 1) {
+		evb10_vop_put(vop, 0x1c10, 0);
+	} else if (evb10_vop_es2 == 2) {
+		evb10_vop_put(vop, 0x1c04, 0x0000b0a0U);
+	}
+	if (!window) {
+		evb10_vop_put(vop, 0x1e10, 0);
+		evb10_vop_commit(vop, commit, "no window");
+		printf("evb10: vop: background only (evb10-vop=3): ctrl %08x bg %08x line %u\n", vop[0x1e10 / 4], vop[0xf2c / 4],
+		    evb10_vop_frames(vop));
+		return;
+	}
+
+	/* Attempt 1: the recipe of the U-Boot prompt, one register at a time. */
+	evb10_vop_put(vop, 0x1e10, 0);
+	evb10_vop_put(vop, 0x0, 0x8000);
+	evb10_vop_put(vop, 0x1e14, (uint32_t)fb);
+	evb10_vop_put(vop, 0x1e1c, vir);
+	evb10_vop_put(vop, 0x1e20, act);
+	evb10_vop_put(vop, 0x1e24, act);
+	evb10_vop_put(vop, 0x1e28, st);
+	evb10_vop_put(vop, 0x1e10, 1);
+	evb10_vop_commit(vop, commit, "attempt 1");
+	printf("evb10: vop: attempt 1: %s: cfg_done %08x ctrl %08x mst %08x vir %08x act %08x dsp %08x st %08x (wanted 1 %08x %08x %08x %08x %08x) bg %08x line %u\n",
+	    evb10_vop_window_is(vop, (uint32_t)fb, vir, act, st) ? "ACTIVE" : "not latched", vop[0], vop[0x1e10 / 4], vop[0x1e14 / 4],
+	    vop[0x1e1c / 4], vop[0x1e20 / 4], vop[0x1e24 / 4], vop[0x1e28 / 4], (uint32_t)fb, vir, act, act, st, vop[0xf2c / 4],
+	    evb10_vop_frames(vop));
+	if (evb10_vop_window_is(vop, (uint32_t)fb, vir, act, st)) {
+		return;
+	}
+
+	/* Attempt 2: three commits, each waited for (window off, geometry, window on). */
+	evb10_vop_put(vop, 0x1e10, 0);
+	evb10_vop_commit(vop, commit, "attempt 2 (window off)");
+	printf("evb10: vop: attempt 2: window off: ctrl %08x line %u\n", vop[0x1e10 / 4], evb10_vop_frames(vop));
+	evb10_vop_put(vop, 0x1e14, (uint32_t)fb);
+	evb10_vop_put(vop, 0x1e1c, vir);
+	evb10_vop_put(vop, 0x1e20, act);
+	evb10_vop_put(vop, 0x1e24, act);
+	evb10_vop_put(vop, 0x1e28, st);
+	evb10_vop_commit(vop, commit, "attempt 2 (geometry)");
+	printf("evb10: vop: attempt 2: geometry: mst %08x vir %08x act %08x st %08x line %u\n", vop[0x1e14 / 4], vop[0x1e1c / 4],
+	    vop[0x1e20 / 4], vop[0x1e28 / 4], evb10_vop_frames(vop));
+	evb10_vop_put(vop, 0x1e10, 1);
+	evb10_vop_commit(vop, commit, "attempt 2 (window on)");
+	printf("evb10: vop: attempt 2: %s: cfg_done %08x ctrl %08x mst %08x vir %08x act %08x st %08x line %u\n",
+	    evb10_vop_window_is(vop, (uint32_t)fb, vir, act, st) ? "ACTIVE" : "not latched", vop[0], vop[0x1e10 / 4], vop[0x1e14 / 4],
+	    vop[0x1e1c / 4], vop[0x1e20 / 4], vop[0x1e28 / 4], evb10_vop_frames(vop));
+	if (evb10_vop_window_is(vop, (uint32_t)fb, vir, act, st)) {
+		return;
+	}
+
+	/* Attempt 3: the same geometry, committed on every port at once (no sys_cfg_done: 3588/pitfalls.md 117). */
+	evb10_vop_put(vop, 0x1e14, (uint32_t)fb);
+	evb10_vop_put(vop, 0x1e1c, vir);
+	evb10_vop_put(vop, 0x1e20, act);
+	evb10_vop_put(vop, 0x1e24, act);
+	evb10_vop_put(vop, 0x1e28, st);
+	evb10_vop_commit(vop, 0x008f800fU, "attempt 3 (all ports)");
+	printf("evb10: vop: attempt 3: %s: cfg_done %08x ctrl %08x mst %08x vir %08x act %08x st %08x bg %08x line %u\n",
+	    evb10_vop_window_is(vop, (uint32_t)fb, vir, act, st) ? "ACTIVE" : "not latched", vop[0], vop[0x1e10 / 4], vop[0x1e14 / 4],
+	    vop[0x1e1c / 4], vop[0x1e20 / 4], vop[0x1e28 / 4], vop[0xf2c / 4], evb10_vop_frames(vop));
+}
+
+/*
+ * Why does the window's fetch run dry (xnu-probe/runs/emmc6b: POST_BUF_EMPTY on the panel's video port from the top edge of the window
+ * on, and on the firmware's own port VP2 over its whole picture; emmc6c, no window: none at all)? The VOP is a master on the
+ * NoC and its place in the queue of the DDR controller is the QoS priority of its two AXI masters, qos_vop_m0 at 0xfdf82000 and
+ * qos_vop_m1 at 0xfdf82200 (id, revision, priority, mode, bandwidth, saturation, extcontrol; the shaping register is at +0x88).
+ * Rockchip's U-Boot writes 0x303 into both priority registers ("Peri > VOP/MCU > ISP/VICAP > other ... VOP priority can only be
+ * modified during the u-boot stage, as VOP default power down, and power up after trust": arch/arm/mach-rockchip/rk3588/rk3588.c),
+ * and the vendor kernel's power-domain driver saves and restores them around a power cycle of the domain. What stands in them now?
+ * evb10-vop-qos=N (1..7) writes N as both the read and the write priority of both masters, to see whether that helps.
+ */
+static void
+evb10_vop_qos(int set)
+{
+	volatile uint32_t *qos = (volatile uint32_t *)ml_io_map(0xfdf82000UL, 0x1000);
+
+	if (qos == NULL) {
+		printf("evb10: vop qos: cannot map the NoC registers\n");
+		return;
+	}
+	for (int pass = 0; pass < (set > 0 ? 2 : 1); pass++) {
+		if (pass == 1) {
+			for (int m = 0; m < 2; m++) {
+				qos[(m * 0x200 + 0x08) / 4] = ((uint32_t)(set & 7) << 8) | (uint32_t)(set & 7);
+			}
+			printf("evb10: vop qos: priority %d written to both masters\n", set & 7);
+		}
+		for (int m = 0; m < 2; m++) {
+			volatile uint32_t *r = qos + (m * 0x200) / 4;
+
+			printf("evb10: vop qos m%d: id %08x rev %08x priority %08x mode %08x bandwidth %08x saturation %08x ext %08x shaping %08x\n", m,
+			    r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[0x88 / 4]);
+		}
+	}
+}
+
+/*
+ * evb10-exec=1  the owner's test program replaces launchd as the init process. The files are the ones package/Mali carries
+ * (gpu-mali/usertest: Mach-Os the owner built and signed ad hoc, whose cdhashes are in the OWNER module of the trust bundle,
+ * xnu-probe/make-owner-trust-bundle.py; the first one is the init program, the others are what it loads, such as PanVK's ICD library):
+ * they are written to /private/var/evb10 of the Data volume (so this needs emmc-data-mount=1) on every boot, inflated first when the
+ * kernel carries them as a zlib stream, and the first exec attempt of the init program is for the first file. When it is not there,
+ * cannot be written, or is not accepted by the exec, the usual list of init programs follows and launchd starts as before.
+ */
+extern int mali_test_file(unsigned index, const char **name, const uint8_t **data, size_t *size, size_t *raw_size);
+#include <libkern/zlib.h>
+
+/* The kernel's zlib is built without default allocators (NO_ZCFUNCS): a stream that has none calls a null pointer. */
+static void *
+evb10_zalloc(void *opaque, unsigned items, unsigned size)
+{
+	size_t n = (size_t)items * size + 16;
+	uint64_t *p = kalloc_data(n, Z_WAITOK | Z_ZERO);
+
+	(void)opaque;
+	if (p == NULL) {
+		return NULL;
+	}
+	p[0] = n;
+	return p + 2;
+}
+
+static void
+evb10_zfree(void *opaque, void *ptr)
+{
+	(void)opaque;
+	if (ptr != NULL) {
+		uint64_t *p = (uint64_t *)ptr - 2;
+
+		kfree_data(p, (vm_size_t)p[0]);
+	}
+}
+
+/* Inflate a whole zlib stream into dest (exactly dest_len bytes expected). Returns zlib's code, 0 = ok. */
+static int
+evb10_inflate(unsigned char *dest, size_t dest_len, const unsigned char *source, size_t source_len)
+{
+	z_stream zs;
+	int err;
+
+	bzero(&zs, sizeof(zs));
+	zs.next_in = (Bytef *)(uintptr_t)source;
+	zs.avail_in = (uInt)source_len;
+	zs.next_out = dest;
+	zs.avail_out = (uInt)dest_len;
+	zs.zalloc = evb10_zalloc;
+	zs.zfree = evb10_zfree;
+	err = inflateInit(&zs);
+	if (err != Z_OK) {
+		return err;
+	}
+	err = inflate(&zs, Z_FINISH);
+	if (err != Z_STREAM_END || zs.total_out != dest_len) {
+		(void)inflateEnd(&zs);
+		return err == Z_STREAM_END ? Z_DATA_ERROR : err;
+	}
+	return inflateEnd(&zs);
+}
+
+/*
+ * The GPU addon (boot-arg evb10-gpu-addon=1): the Metal plugin of the Mali (gpu-mali/metal-plugin: NativeMaliMetal.bundle with PanVK beside it)
+ * travels in the boot payload (/chosen/memory-map/GpuAddon, made by gpu-mali/metal-plugin/make-addon.py: the format of UniXNU's
+ * scripts/make-gpu-addon.py). Every file of it whose content or mode differs from the Data volume's is written to /private/var/ngpu/<name>,
+ * and /private/var/ngpu/addons is union-mounted (bindfs, read-only) over /System/Library/Extensions, where the original Metal discovery
+ * looks for <MetalPluginName>.bundle: the sealed system volume stays untouched, the bundle appears next to the original ones, and the
+ * files report root as owner (BINDM_FORCE_ROOT of the boot-time mount). Same design as UniXNU-sheng's native_gpu_addon_prepare (kern_exec.c),
+ * whose code is static to the Sheng owner path this kernel does not use. Code in the bundle still has to pass AMFI through the trust cache.
+ * Never panics: whatever fails is only recorded and printed.
+ */
+extern int mali_gpu_addon(const uint8_t **data, uint64_t *bytes);
+extern volatile int native_bindfs_boot_mount;
+#define EVB10_NGPU_DIR "/private/var/ngpu"
+#define EVB10_ADDON_SOURCE EVB10_NGPU_DIR "/addons"
+#define EVB10_ADDON_POINT "/System/Library/Extensions"
+#define EVB10_ADDON_BUNDLE EVB10_ADDON_POINT "/NativeMaliMetal.bundle"
+volatile int evb10_addon_files = -1;
+volatile int evb10_addon_written = 0;
+volatile int evb10_addon_same = 0;
+volatile int evb10_addon_failed = 0;
+volatile int evb10_addon_stage = 0;
+volatile int evb10_addon_status = -1;
+static volatile int evb10_addon_ready;
+
+static int
+evb10_file_equal(vfs_context_t ctx, const char *path, const uint8_t *data, uint64_t size, uint32_t mode)
+{
+	vnode_t vp = NULLVP;
+	struct vnode_attr va;
+	int equal = 0;
+
+	if (vnode_open(path, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx)) {
+		return 0;
+	}
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_data_size);
+	VATTR_WANTED(&va, va_mode);
+	if (!vnode_getattr(vp, &va, ctx) && va.va_data_size == size && (va.va_mode & 07777) == mode) {
+		const uint32_t chunk = 1024 * 1024;
+		uint8_t *buffer = kalloc_data(chunk, Z_WAITOK);
+
+		if (buffer) {
+			equal = 1;
+			for (uint64_t at = 0; equal && at < size; at += chunk) {
+				int length = (int)(size - at < chunk ? size - at : chunk), resid = 0;
+
+				if (vn_rdwr(UIO_READ, vp, (caddr_t)buffer, length, (off_t)at, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid,
+				    vfs_context_proc(ctx)) || resid || memcmp(buffer, data + at, length)) {
+					equal = 0;
+				}
+			}
+			kfree_data(buffer, chunk);
+		}
+	}
+	vnode_close(vp, FREAD, ctx);
+	return equal;
+}
+
+/* The addon's files into /private/var/ngpu (the directories on the way made as needed). 0: all in place. */
+static int
+evb10_addon_install(struct evb10_copy *copy)
+{
+	const uint8_t *addon = NULL;
+	uint64_t bytes = 0, total = 0;
+	uint32_t count = 0;
+
+	if (!mali_gpu_addon(&addon, &bytes)) {
+		printf("evb10: addon: the loader handed over none (/chosen/memory-map/GpuAddon)\n");
+		return ENOENT;
+	}
+	if (bytes < 24 || memcmp(addon, "NGPUADD2", 8)) {
+		return EINVAL;
+	}
+	memcpy(&count, addon + 8, 4);
+	memcpy(&total, addon + 16, 8);
+	if (total != bytes || !count || count > 4096) {
+		return EINVAL;
+	}
+	/* The whole addon is validated before anything is written. */
+	uint64_t at = 24;
+	for (uint32_t i = 0; i < count; ++i) {
+		uint32_t name_bytes = 0, mode = 0;
+		uint64_t size = 0, packed = 0;
+
+		if (bytes - at < 24) {
+			return EINVAL;
+		}
+		memcpy(&name_bytes, addon + at, 4);
+		memcpy(&mode, addon + at + 4, 4);
+		memcpy(&size, addon + at + 8, 8);
+		memcpy(&packed, addon + at + 16, 8);
+		at += 24;
+		uint64_t name_padded = (name_bytes + 7) & ~7ULL, size_padded = (packed + 7) & ~7ULL;
+		const char *name = (const char *)(addon + at);
+
+		if (name_bytes < 2 || name_bytes > 160 || bytes - at < name_padded || name[name_bytes - 1] || strnlen(name, name_bytes) != name_bytes - 1 ||
+		    name[0] == '/' || (mode & ~0777) || size > INT32_MAX || !packed || packed > INT32_MAX || bytes - at - name_padded < size_padded) {
+			return EINVAL;
+		}
+		for (uint32_t k = 0; k + 1 < name_bytes - 1; ++k) {
+			if (name[k] == '.' && name[k + 1] == '.') {
+				return EINVAL;
+			}
+		}
+		at += name_padded + size_padded;
+	}
+	if (at != bytes) {
+		return EINVAL;
+	}
+	evb10_addon_files = (int)count;
+	int error = evb10_copy_ensure_dir(copy, EVB10_NGPU_DIR, 0755, 0, 0);
+
+	at = 24;
+	for (uint32_t i = 0; i < count && !error; ++i) {
+		uint32_t name_bytes = 0, mode = 0;
+		uint64_t size = 0, packed = 0;
+		char path[192];
+
+		memcpy(&name_bytes, addon + at, 4);
+		memcpy(&mode, addon + at + 4, 4);
+		memcpy(&size, addon + at + 8, 8);
+		memcpy(&packed, addon + at + 16, 8);
+		at += 24;
+		const char *name = (const char *)(addon + at);
+
+		at += (name_bytes + 7) & ~7ULL;
+		snprintf(path, sizeof(path), EVB10_NGPU_DIR "/%s", name);
+		/* the directories below /private/var/ngpu */
+		for (size_t k = sizeof(EVB10_NGPU_DIR); path[k] && !error; ++k) {
+			if (path[k] == '/') {
+				path[k] = 0;
+				error = evb10_copy_ensure_dir(copy, path, 0755, 0, 0);
+				path[k] = '/';
+			}
+		}
+		uint8_t *data = error ? NULL : kalloc_data(size ? size : 1, Z_WAITOK);
+		int result = error ? error : (data ? evb10_inflate(data, size, addon + at, packed) : ENOMEM);
+
+		if (!result) {
+			if (evb10_file_equal(copy->ctx, path, data, size, mode)) {
+				evb10_addon_same++;
+			} else {
+				result = evb10_write_bytes(copy, path, data, size, mode, 0, 0);
+				if (result) {
+					printf("evb10: addon: %s: write failed (%d)\n", path, result);
+					evb10_addon_failed++;
+				} else {
+					evb10_addon_written++;
+				}
+			}
+		} else {
+			printf("evb10: addon: %s: %s (%d)\n", path, data ? "inflate failed" : "no memory", result);
+			evb10_addon_failed++;
+		}
+		if (data) {
+			kfree_data(data, size ? size : 1);
+		}
+		at += (packed + 7) & ~7ULL;
+		error = 0;   /* a file that fails keeps its old content; the rest goes on */
+	}
+	return evb10_addon_failed ? EIO : 0;
+}
+
+/* /private/var/ngpu/addons over /System/Library/Extensions: the owner's bindfs mount, before launchd, without the entitlement an ordinary mount
+ * of that type needs (native_bindfs_boot_mount is set around this one mount() call only). */
+static int
+evb10_addon_mount(proc_t p, user_addr_t scratch)
+{
+	struct mount_args request = {.type = scratch + 0x400, .path = scratch + 0x420, .flags = MNT_RDONLY | MNT_UNION, .data = scratch + 0x500};
+	int32_t result = 0;
+	vnode_t probe = NULLVP;
+	int error;
+
+	evb10_addon_stage = 1;
+	if ((error = vnode_lookup(EVB10_ADDON_SOURCE, 0, &probe, vfs_context_current())) != 0) {
+		return error;
+	}
+	vnode_put(probe);
+	probe = NULLVP;
+	evb10_addon_stage = 2;
+	if ((error = copyout("bindfs", request.type, 7)) || (error = copyout(EVB10_ADDON_POINT, request.path, sizeof(EVB10_ADDON_POINT))) ||
+	    (error = copyout(EVB10_ADDON_SOURCE, request.data, sizeof(EVB10_ADDON_SOURCE)))) {
+		return error;
+	}
+	native_bindfs_boot_mount = 1;
+	error = mount(p, &request, &result);
+	native_bindfs_boot_mount = 0;
+	if (error) {
+		return error;
+	}
+	evb10_addon_stage = 3;
+	/* The union shows a sealed lower entry next to the owner's ... */
+	if ((error = vnode_lookup(EVB10_ADDON_POINT "/AGXMetalA10.bundle", 0, &probe, vfs_context_current())) == 0) {
+		vnode_put(probe);
+		probe = NULLVP;
+		evb10_addon_stage = 4;
+	}
+	/* ... and the owner's own entry is visible through it. */
+	if ((error = vnode_lookup(EVB10_ADDON_BUNDLE "/Info.plist", 0, &probe, vfs_context_current())) == 0) {
+		vnode_put(probe);
+		evb10_addon_stage = 5;
+	}
+	return error;
+}
+
+/*
+ * The render server (backboardd) picks a wide-gamut "deep" framebuffer ('b3a8' = 30RGBLE_8A_BiPlanar: 10-bit colour plane plus an 8-bit alpha plane)
+ * and compressed surfaces unless told not to, and the display path (GopFramebuffer's validateSwap) takes plain 8-bit BGRA only (xnu-probe/runs/gpu24:
+ * "swap rejected, surface 1072x1904 format 62336138 planes 2"). The preferences are read when the process starts, before any plugin code can run,
+ * so they are in the Data volume before launchd, as UniXNU-sheng's scripts/add-gpu-plugin-data.py seeds them: the process's own domain
+ * (backboardd) for its user (mobile) and for root. Written on every boot, whatever else the volume keeps; evb10-gpu-prefs=0 turns it off.
+ */
+/* Whether the file (up to its first 64 KiB) holds this text: the keys of a property list, in either form, appear in it as they are. */
+static int
+evb10_file_has_text(vfs_context_t ctx, const char *path, const char *needle)
+{
+	vnode_t vp = NULLVP;
+	struct vnode_attr va;
+	int found = 0;
+
+	if (vnode_open(path, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx)) {
+		return 0;
+	}
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_data_size);
+	if (!vnode_getattr(vp, &va, ctx) && va.va_data_size > 0) {
+		size_t length = (size_t)MIN(va.va_data_size, (uint64_t)65536), needle_length = strlen(needle);
+		uint8_t *buffer = kalloc_data(length, Z_WAITOK);
+		int resid = 0;
+
+		if (buffer) {
+			if (!vn_rdwr(UIO_READ, vp, (caddr_t)buffer, (int)length, 0, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx))) {
+				for (size_t at = 0; at + needle_length <= length - (size_t)resid && !found; ++at) {
+					found = !memcmp(buffer + at, needle, needle_length);
+				}
+			}
+			kfree_data(buffer, length);
+		}
+	}
+	vnode_close(vp, FREAD, ctx);
+	return found;
+}
+
+static void
+evb10_gpu_prefs_write(struct evb10_copy *copy)
+{
+	static const struct {
+		const char *dir;
+		const char *library;
+		uid_t uid;
+		gid_t gid;
+	} homes[] = {
+		{"/private/var/mobile/Library/Preferences", "/private/var/mobile/Library", 501, 501},
+		{"/private/var/root/Library/Preferences", "/private/var/root/Library", 0, 0},
+	};
+	static const char body[] = EVB10_PL_HEAD EVB10_PL_FALSE("CAEnableDeepFramebuffer") EVB10_PL_FALSE("CAEnableFramebufferCompression")
+	    EVB10_PL_FALSE("CAEnableIOSurfaceCompression") EVB10_PL_TAIL;
+	/* The global domain (the lookup of a process's own domain falls back to it; the sandbox may allow only that one): the OS image's file holds
+	 * these two keys, so they are kept, and a file that already carries the key is left alone (cfprefsd may have rewritten it in binary form). */
+	static const char global_body[] = EVB10_PL_HEAD "\t<key>AppleLanguages</key>\n\t<array>\n\t\t<string>en</string>\n\t</array>\n"
+	    "\t<key>AppleLocale</key>\n\t<string>en_US</string>\n" EVB10_PL_FALSE("CAEnableDeepFramebuffer")
+	    EVB10_PL_FALSE("CAEnableFramebufferCompression") EVB10_PL_FALSE("CAEnableIOSurfaceCompression") EVB10_PL_TAIL;
+	int want = 1, failures = 0;
+
+	PE_parse_boot_argn("evb10-gpu-prefs", &want, sizeof(want));
+	if (!want) {
+		return;
+	}
+	for (size_t i = 0; i < sizeof(homes) / sizeof(homes[0]); ++i) {
+		char path[96];
+		int error = evb10_copy_ensure_dir(copy, homes[i].library, 0755, homes[i].uid, homes[i].gid);
+
+		if (!error) {
+			error = evb10_copy_ensure_dir(copy, homes[i].dir, 0755, homes[i].uid, homes[i].gid);
+		}
+		if (!error) {
+			snprintf(path, sizeof(path), "%s/backboardd.plist", homes[i].dir);
+			error = evb10_seed_write(copy, path, body, 0600, homes[i].uid, homes[i].gid);
+		}
+		if (!error) {
+			snprintf(path, sizeof(path), "%s/.GlobalPreferences.plist", homes[i].dir);
+			if (!evb10_file_has_text(copy->ctx, path, "CAEnableDeepFramebuffer")) {
+				error = evb10_seed_write(copy, path, global_body, 0644, homes[i].uid, homes[i].gid);
+			}
+		}
+		if (error) {
+			printf("evb10: gpu prefs: %s: %d\n", homes[i].dir, error);
+			failures++;
+		}
+	}
+	printf("evb10: gpu prefs: backboardd.plist (deep framebuffer and compression off) for mobile and root: %d failure(s)\n", failures);
+}
+
+static void
+evb10_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+{
+	struct evb10_copy copy = {.p = p, .scratch = scratch, .ctx = vfs_context_current()};
+	int error;
+
+	if (evb10_data_status != 0) {
+		printf("evb10: addon: the Data volume is not mounted (status %d): no addon\n", evb10_data_status);
+		return;
+	}
+	evb10_gpu_prefs_write(&copy);
+	error = evb10_addon_install(&copy);
+	printf("evb10: addon: %d file(s): %d written, %d already in place, %d failed: %d\n", evb10_addon_files, evb10_addon_written, evb10_addon_same,
+	    evb10_addon_failed, error);
+	if (evb10_addon_files < 0) {
+		return;
+	}
+	evb10_addon_status = evb10_addon_mount(p, scratch);
+	printf("evb10: addon: mounted over " EVB10_ADDON_POINT ": stage %d status %d (5 = our bundle visible next to the sealed ones)\n",
+	    evb10_addon_stage, evb10_addon_status);
+	evb10_addon_ready = evb10_addon_stage >= 3;
+}
+
+#define EVB10_EXEC_DIR "/private/var/evb10"
+#define EVB10_EXEC_FILES 8
+static char evb10_exec_init[96];
+static volatile int evb10_exec_ready;
+static volatile int evb10_exec_used;
+
+static void
+evb10_exec_prepare(proc_t p, user_addr_t scratch)
+{
+	struct evb10_copy copy = {.p = p, .scratch = scratch, .ctx = vfs_context_current()};
+
+	if (evb10_data_status != 0) {
+		printf("evb10: exec: the Data volume is not mounted (status %d): launchd starts as usual\n", evb10_data_status);
+		return;
+	}
+	int error = evb10_copy_ensure_dir(&copy, EVB10_EXEC_DIR, 0755, 0, 0);
+	for (unsigned i = 0; i < EVB10_EXEC_FILES && !error; i++) {
+		const char *name = NULL;
+		const uint8_t *data = NULL;
+		size_t size = 0, raw = 0;
+		char path[96];
+
+		if (mali_test_file(i, &name, &data, &size, &raw) != 0 || !name || !data || !size) {
+			if (i == 0) {
+				printf("evb10: exec: the kernel carries no test program: launchd starts as usual\n");
+				return;
+			}
+			break;
+		}
+		snprintf(path, sizeof(path), EVB10_EXEC_DIR "/%s", name);
+		if (raw) {
+			unsigned char *inflated = kalloc_data(raw, Z_WAITOK);
+			int zerr = inflated ? evb10_inflate(inflated, raw, data, size) : -4;
+
+			if (zerr != 0) {
+				printf("evb10: exec: %s: inflate failed (zlib %d)\n", path, zerr);
+				error = EINVAL;
+			} else {
+				error = evb10_write_bytes(&copy, path, inflated, raw, 0755, 0, 0);
+			}
+			if (inflated) {
+				kfree_data(inflated, raw);
+			}
+		} else {
+			error = evb10_write_bytes(&copy, path, data, size, 0755, 0, 0);
+		}
+		printf("evb10: exec: %s written (%lu bytes%s): %d\n", path, (unsigned long)(raw ? raw : size), raw ? ", inflated" : "", error);
+		if (i == 0) {
+			strlcpy(evb10_exec_init, path, sizeof(evb10_exec_init));
+		}
+	}
+	evb10_exec_ready = error == 0;
+}
+
+/*
+ * The platform side of the sandbox (or AMFI) refuses an executable mapping of any file of the Data volume, even one the owner's trust
+ * module vouches for and exec accepts (xnu-probe/runs/gpu6: mmap(PROT_EXEC) of /private/var/evb10/gpu-test -> EPERM; the same call on
+ * /sbin/launchd, /usr/lib/dyld works), so dyld cannot load a library from there. The owner's directory is the exception, and only
+ * when evb10-exec=1 has filled it: its files are the ones the kernel itself wrote at boot from its own image, their cdhashes are in the
+ * owner module, and mmap() (bsd/kern/kern_mman.c, evb10-mmap-grant.patch) calls this where the MAC policies said no.
+ */
+int evb10_mmap_grant(vnode_t vp);
+
+int
+evb10_mmap_grant(vnode_t vp)
+{
+	int ok = 0;
+	int length = MAXPATHLEN;
+	char *path;
+
+	if (!evb10_exec_ready && !evb10_addon_ready) {
+		return 0;
+	}
+	path = kalloc_data(MAXPATHLEN, Z_WAITOK);
+	if (path == NULL) {
+		return 0;
+	}
+	if (vn_getpath(vp, path, &length) == 0) {
+		if (evb10_exec_ready && strncmp(path, EVB10_EXEC_DIR "/", sizeof(EVB10_EXEC_DIR)) == 0) {
+			ok = 1;
+			printf("evb10: exec: mmap granted for %s\n", path);
+		} else if (evb10_addon_ready && strncmp(path, EVB10_ADDON_BUNDLE "/", sizeof(EVB10_ADDON_BUNDLE)) == 0) {
+			ok = 1;
+			printf("evb10: addon: mmap granted for %s\n", path);
+		}
+	}
+	kfree_data(path, MAXPATHLEN);
+	return ok;
+}
+
+/* The path the first exec attempt really uses (called from load_init_program_at_path after evb10_userland_prepare). */
+const char *evb10_init_override(const char *path);
+
+const char *
+evb10_init_override(const char *path)
+{
+	if (evb10_exec_ready && !evb10_exec_used) {
+		evb10_exec_used = 1;
+		printf("evb10: exec: the init program is %s (instead of %s)\n", evb10_exec_init, path);
+		return evb10_exec_init;
+	}
+	return path;
+}
+
+int evb10_userland_prepare(proc_t p, user_addr_t scratch);
+
+int
+evb10_userland_prepare(proc_t p, user_addr_t scratch)
+{
+	static volatile int done = 0;
+	int union_arg = 0, data_arg = 0, ps_arg = 0, vop_arg = 0;
+
+	/* The first exec attempt is for a launchd that is not there; this runs for that one and not again. */
+	if (done) {
+		return 0;
+	}
+	done = 1;
+	if (PE_parse_boot_argn("evb10-vop", &vop_arg, sizeof(vop_arg)) && vop_arg) {
+		evb10_vop_dump();
+		evb10_panel_pins_dump();
+		evb10_cru_dump();
+		if (vop_arg >= 2) {
+			volatile uint32_t *vop = (volatile uint32_t *)ml_io_map(0xfdd90000UL, 0x10000);
+
+			if (vop != NULL) {
+				int qos_arg = 0;
+
+				(void) PE_parse_boot_argn("evb10-vop-qos", &qos_arg, sizeof(qos_arg));
+				int gating_arg = 0;
+
+				evb10_vop_qos(qos_arg);
+				/*
+				 * AUTO_GATING_CTRL (0x008) still has its reset value, all ones (bit 31 auto_gating_en, bit 7 aclk_pre_auto_gating_en, ...):
+				 * Rockchip's U-Boot clears it for the RK3568 only, but the vendor kernel's vop2 driver clears auto_gating_en on every
+				 * chip ("this is a workaround to avoid display image shift when a window enabled"). A window that starts after 720
+				 * lines of nothing to fetch is exactly that. evb10-vop-gating=1 clears bit 31 (the kernel's value), =2 writes 0 (U-Boot's RK3568 value).
+				 */
+				/*
+				 * Esmart2 is the firmware's window for its own HDMI0 port, left running with the GOP surface, and it has the same AXI bus
+				 * and the same AXI ids (0xc/0xd on bus 1) as Esmart3, the panel's window (the reset values of ESMART2/3 CTRL1 are 0xd0c0 for
+				 * both): the vendor kernel gives Esmart2 0xa/0xb and Esmart3 0xc/0xd, so no two windows ever share an id.
+				 * Reads that carry the same id come back in order, and each one waits behind the other window's. Measured
+				 * (xnu-probe/runs/emmc6b/c): with Esmart3 off neither port ever runs dry, with it on both do, VP2 over its whole picture.
+				 * evb10-vop-es2=1 turns Esmart2 off, =2 gives it the ids 0xa/0xb (applied at the commit that follows the window).
+				 */
+				(void) PE_parse_boot_argn("evb10-vop-es2", &evb10_vop_es2, sizeof(evb10_vop_es2));
+				if (PE_parse_boot_argn("evb10-vop-gating", &gating_arg, sizeof(gating_arg)) && gating_arg) {
+					uint32_t before = vop[0x008 / 4];
+
+					vop[0x008 / 4] = gating_arg == 2 ? 0 : (before & ~0x80000000U);
+					printf("evb10: vop: auto gating ctrl %08x -> %08x (evb10-vop-gating=%d)\n", before, vop[0x008 / 4], gating_arg);
+				}
+				evb10_vop_scope(vop, "before");
+				evb10_vop_show_gop(vop, vop_arg != 3);
+				if (evb10_vop_es2) {
+					evb10_vop_commit(vop, 0x008f800fU, "esmart2 change (all ports)");
+					printf("evb10: vop: esmart2 ctrl0 %08x ctrl1 %08x axi %08x region ctrl %08x (evb10-vop-es2=%d); esmart3 ctrl1 %08x axi %08x\n",
+					    vop[0x1c00 / 4], vop[0x1c04 / 4], vop[0x1c08 / 4], vop[0x1c10 / 4], evb10_vop_es2, vop[0x1e04 / 4], vop[0x1e08 / 4]);
+				}
+				evb10_vop_scope(vop, "after");
+				evb10_vop_base = vop;
+				evb10_vop_watch = 1;   /* the sampler reports the video port's interrupt flags from now on (evb10-thread-sample.c.inc) */
+			}
+		}
+	}
+	if (PE_parse_boot_argn("evb10-ps", &ps_arg, sizeof(ps_arg)) && ps_arg > 0) {
+		thread_t thread = THREAD_NULL;
+		evb10_trace_exits = 1;
+		if (kernel_thread_start(evb10_ps_thread, (void *)(uintptr_t)ps_arg, &thread) == KERN_SUCCESS) {
+			thread_deallocate(thread);
+		} else {
+			printf("evb10: ps: cannot start the thread\n");
+		}
+	}
+	if (PE_parse_boot_argn("emmc-systemos-union", &union_arg, sizeof(union_arg)) && union_arg) {
+		evb10_union_status = evb10_systemos_union(p, scratch);
+		printf("evb10: SystemOS union: stage %d status %d\n", evb10_union_stage, evb10_union_status);
+	}
+	if (PE_parse_boot_argn("emmc-data-mount", &data_arg, sizeof(data_arg)) && data_arg) {
+		evb10_data_status = evb10_data_mount(p, scratch);
+		printf("evb10: Data: stage %d status %d\n", evb10_data_stage, evb10_data_status);
+	}
+	int exec_arg = 0;
+	if (PE_parse_boot_argn("evb10-exec", &exec_arg, sizeof(exec_arg)) && exec_arg) {
+		evb10_exec_prepare(p, scratch);
+	}
+	int addon_arg = 0;
+	if (PE_parse_boot_argn("evb10-gpu-addon", &addon_arg, sizeof(addon_arg)) && addon_arg) {
+		evb10_gpu_addon_prepare(p, scratch);
+	}
+	return 0;
+}
+#endif /* DEVELOPMENT || DEBUG */

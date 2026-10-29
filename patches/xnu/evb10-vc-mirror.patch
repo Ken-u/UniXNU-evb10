@@ -1,0 +1,49 @@
+--- a/osfmk/console/serial_console.c
++++ b/osfmk/console/serial_console.c
+@@ -120,6 +120,17 @@
+ #define allow_printf_from_interrupts_disabled_context false
+ #endif
+ 
++/*
++ * EVB10: with serial=3 the console is the UART only, so a monitor stays black.
++ * boot-arg vc_mirror=1 also draws every console character on the framebuffer.
++ * The UART always gets the character first, and vcputc_options() does nothing
++ * until the video console is enabled, so this cannot hide or delay serial
++ * output. Needs text mode (see PE_create_console: "-v").
++ * Writeable: the display driver of the board (package/LegacyDisplayProbe.cpp) switches
++ * it off once the system display is live, so the kernel log stops scrolling over the UI.
++ */
++TUNABLE_WRITEABLE(bool, evb10_vc_mirror, "vc_mirror", false);
++
+ SECURITY_READ_ONLY_EARLY(struct console_ops) cons_ops[] = {
+ 	{
+ 		.putc = serial_putc_options, .getc = _serial_getc,
+@@ -263,6 +274,9 @@
+ 	}
+ 
+ 	cons_ops[idx].putc(c, poll);
++	if (idx == SERIAL_CONS_OPS && evb10_vc_mirror) {
++		vcputc_options(c, poll);
++	}
+ }
+ 
+ /**
+--- a/pexpert/arm/pe_init.c
++++ b/pexpert/arm/pe_init.c
+@@ -534,7 +534,15 @@
+ 	 */
+ 	check_for_panic_log();
+ 
+-	if (PE_state.video.v_display) {
++	/*
++	 * iBoot passes Video.v_display = 0 (text mode) when the boot-args contain
++	 * "-v". DarwinBoot always reports a graphics-mode framebuffer
++	 * (v_display = 1), and nothing in this tree ever asks for kPETextScreen,
++	 * so "-v" would never draw a character. Honour "-v" the way iBoot does.
++	 */
++	int verbose_boot = 0;
++	if (PE_state.video.v_display &&
++	    !PE_parse_boot_argn("-v", &verbose_boot, sizeof(verbose_boot))) {
+ 		PE_initialize_console(&PE_state.video, kPEGraphicsMode);
+ 	} else {
+ 		PE_initialize_console(&PE_state.video, kPETextMode);
