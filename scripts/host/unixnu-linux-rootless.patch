@@ -1,0 +1,53 @@
+diff --git a/scripts/linux/prepare-xnu.py b/scripts/linux/prepare-xnu.py
+index efef7a6..1473f6c 100755
+--- a/scripts/linux/prepare-xnu.py
++++ b/scripts/linux/prepare-xnu.py
+@@ -97,8 +97,13 @@ def fetch(directory, url, commit, *paths):
+     if head.returncode == 0 and head.stdout.strip() == commit:
+         return
+     shutil.rmtree(directory, ignore_errors=True)
+-    for command in (['init', '-q', directory], ['-C', directory, 'sparse-checkout', 'set', '--no-cone', *paths],
+-                    ['-C', directory, 'fetch', '-q', '--depth', '1', '--filter=blob:none', url, commit],
++    # git before 2.27 only accepts --filter once the repository is configured as a partial clone of a named remote.
++    for command in (['init', '-q', directory], ['-C', directory, 'remote', 'add', 'origin', url],
++                    ['-C', directory, 'config', 'extensions.partialClone', 'origin'],
++                    ['-C', directory, 'config', 'remote.origin.promisor', 'true'],
++                    ['-C', directory, 'config', 'remote.origin.partialclonefilter', 'blob:none'],
++                    ['-C', directory, 'sparse-checkout', 'set', '--no-cone', *paths],
++                    ['-C', directory, 'fetch', '-q', '--depth', '1', '--filter=blob:none', 'origin', commit],
+                     ['-C', directory, 'checkout', '-q', 'FETCH_HEAD']):
+         subprocess.run(['git', *map(str, command)], check=True)
+ 
+diff --git a/scripts/linux/setup-toolchain.py b/scripts/linux/setup-toolchain.py
+index 2bbb6ed..57ebf5d 100755
+--- a/scripts/linux/setup-toolchain.py
++++ b/scripts/linux/setup-toolchain.py
+@@ -53,6 +53,7 @@ HOST_PREFIX_H = '''/* Darwin-isms xnu's SETUP host tools use that glibc does not
+ #ifndef _UNIXNU_HOST_PREFIX_H_
+ #define _UNIXNU_HOST_PREFIX_H_
+ #include <bsd/unistd.h>   /* setmode(3)/getmode(3), used by SETUP/installfile */
++#include <bsd/string.h>   /* strlcpy/strlcat: glibc before 2.38 declares neither (SETUP/replacecontents) */
+ static inline const char *getprogname(void)
+ {
+ 	extern char *program_invocation_short_name;
+@@ -231,7 +232,10 @@ def llvm(prefix, work, jobs, host):
+ 
+ def shims(clt, xctoolchain, clang):
+     (clt / 'bin').mkdir(parents=True, exist_ok=True)
+-    for name, directory in [(n, clt / 'bin') for n in CLT_SHIMS] + [(n, Path('/usr/bin')) for n in USR_BIN_SHIMS]:
++    # Rootless: xcrun/plutil/codesign go to PREFIX/shims; the build runs in a user namespace that overlays /usr/bin.
++    usr_bin = Path(os.environ.get('UNIXNU_USR_BIN_SHIMS', '/usr/bin'))
++    usr_bin.mkdir(parents=True, exist_ok=True)
++    for name, directory in [(n, clt / 'bin') for n in CLT_SHIMS] + [(n, usr_bin) for n in USR_BIN_SHIMS]:
+         shutil.copyfile(HERE / name, directory / name)
+         (directory / name).chmod(0o755)
+     env = dict(os.environ, CROSS_CLANG=str(clang), XNU_TOOLCHAIN_BIN=f'{clt / "bin"} {xctoolchain / "bin"}')
+@@ -359,7 +363,7 @@ def main(argv=None):
+     if args.jobs < 1:
+         parser.error('--jobs must be positive')
+     if not args.check:
+-        if os.geteuid():
++        if os.geteuid() and args.package_manager != 'none':
+             parser.error('installation requires root; use --check to inspect host dependencies')
+         for command in package_commands(package_manager(args.package_manager)):
+             run(command, env=dict(os.environ, DEBIAN_FRONTEND='noninteractive'))
