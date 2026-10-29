@@ -1,0 +1,169 @@
+schema_version = 2
+
+[board]
+name = "evb10"
+soc = "RK3588"
+description = "Rockchip RK3588 EVB10 V10"
+kit = "evb10"
+soc_source = "rk3588"
+os_profile = "ipados-17.7.11-21H461"
+
+# The raw image `unixnu build userdata` writes for the `userdata` partition of the eMMC (LBA 8459264 to
+# 122142655 of 512 bytes): a manifest, the OS image and the SystemOS cryptex image of the IPSW. Rk3588Emmc
+# publishes each window as a read-only block device; XNU selects the root volume by
+# [payload.adt] root_match_volume_uuid. Nothing here is flashed by the build.
+[userdata]
+first_lba = 8459264
+last_lba = 122142655
+lba_bytes = 512
+windows = [
+  { name = "OS", component = "OS" },
+  { name = "SystemOS", component = "Cryptex1,SystemOS" },
+]
+
+[kernel]
+defconfig = "evb10_defconfig"
+config_fragments = ["arch:configs/common.config", "soc:configs/rk3588.config", "os:configs/ipados.config"]
+patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
+# Archive builders of the kernel step, in order. `component:<ID>` entries build a catalog driver; the others
+# are scripts of the build tree (this repository's scripts/ and the SoC's).
+archives = [
+  "build-libpthread-kernel.py",
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "component:ArmDTPlatform",
+  # ArmCpu has no patch channel: the SoC's script applies its RK3588 fixes to the checkout first.
+  "apply-armcpu-patches.py",
+  "component:ArmCpu",
+  "component:AppleKeyStoreState",
+  # The eMMC host subclasses the original IOBlockStorageDevice: compile leaves an object, binding makes the archive.
+  "build-evb10-drivers.py Rk3588Emmc",
+  "bind-emmc-storage.py",
+  "build-evb10-drivers.py Evb10Touch",
+  "build-mali-firmware.py",
+  "build-evb10-drivers.py Mali",
+  # Only configs/evb10_display_defconfig links this archive; under evb10_defconfig the step does nothing.
+  "build-evb10-display.py",
+]
+
+[payload]
+volume = "EVB10ESP"
+# Kernel (48 MiB) plus the Data seed (32 MiB RAM disk) measure about 80 MiB. Do not go far above 96: the image
+# rides in a boot image through U-Boot's `fastboot boot`, whose download buffer is 112 MiB and which adds about
+# 6 MiB of firmware around it.
+size_mib = 96
+loader = "firmware"
+title = "UniXNU EVB10"
+dram_size = "0x100000000"
+panic_screen = false
+# The profile's list ends with a different second digest: the second one here covers the SystemOS cryptex of the
+# owner image. The first is the profile's own.
+trust_cache_sha256 = [
+  "7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7",
+  "3312e1caf9ab3162ac23ae616d48bea41a1577286922fc1bff35d47f90a4382a",
+]
+# Boot arguments. Groups:
+#   console    -v verbose; serial=3 UART only; vc_mirror=1 also draw the console on the frame buffer;
+#              debug=0x10014e lifts the serial-output lock and restarts after a panic instead of parking in KDP;
+#              -enable_kprintf_spam makes this DEVELOPMENT kernel print early kprintf lines.
+#   storage    emmc=4 publishes the OS and SystemOS windows of `userdata`; emmc-root-trust, emmc-systemos-union,
+#              emmc-data-mount, emmc-data-size (MiB) and emmc-data-persist=1 keep the Data volume on the card.
+#   cpu        sheng-smp=1 starts the secondary cores (ArmCpu); armcpu-self-ipi=1 and armcpu-mmio-sgi=0 select the IPI
+#              path; wdt-kick keeps the firmware watchdog fed.
+#   display    offline-* and sheng-* arguments are the ones of UniXNU's GOP-backed legacy display; evb10-fb-w/-h give the
+#              kernel's own frame buffer (1072x1904 of the 1080x1920 panel), evb10-vop=2 selects the VOP2 scanout.
+#   input      evb10-touch*, evb10-hid*, sheng-touch-hid.
+#   gpu        mali=8 starts the Mali-G610 firmware and registers the service; mali-metal=1 registers the accelerator for
+#              Metal discovery; evb10-gpu-addon=1 makes the payload tool carry the Metal plug-in.
+#   debugging  evb10-ps (process table every N seconds), evb10-bt* (user stacks of the named processes).
+kernel_args = [
+  "-v",
+  "serial=3",
+  "vc_mirror=1",
+  "debug=0x10014e",
+  "-enable_kprintf_spam",
+  "emmc=4",
+  "offline-apfs-load=1",
+  "emmc-root-trust=1",
+  "emmc-systemos-union=1",
+  "emmc-data-mount=1",
+  "emmc-data-size=2048",
+  "emmc-data-persist=1",
+  "evb10-ps=10",
+  "evb10-vop=2",
+  "evb10-vop-qos=0",
+  "evb10-vop-es2=1",
+  "sheng-smp=1",
+  "armcpu-self-ipi=1",
+  "armcpu-mmio-sgi=0",
+  "wdt-kick=1800",
+  "offline-mobile-graphics-load=1",
+  "offline-legacy-register=1",
+  "offline-legacy-phase=4",
+  "offline-legacy-gop=1",
+  "evb10-fb-w=1072",
+  "evb10-fb-h=1904",
+  "offline-legacy-unit-scale=2",
+  "offline-legacy-pm=1",
+  "offline-legacy-validate=1",
+  "offline-legacy-transfer=1",
+  "offline-legacy-cpu-present=1",
+  "offline-key-events=1",
+  "sheng-aks=1",
+  "sheng-vsync=60",
+  "evb10-hid=1",
+  "evb10-touch=1",
+  "mali=8",
+  "mali-metal=1",
+  "evb10-gpu-addon=1",
+  "evb10-touch-xmax=720",
+  "evb10-touch-ymax=1280",
+  "evb10-hid-input=1",
+  "sheng-touch-hid=1",
+  "evb10-bt=SpringBoard",
+  "evb10-bt2=chronod",
+  "evb10-bt3=liveactivitiesd",
+  "evb10-bt4=backboardd",
+]
+
+[payload.adt]
+chip_id = "0x1"
+unique_chip_id = "required"
+# The memory the kernel owns: DarwinBoot takes this many contiguous bytes from the UEFI memory map. 2 GiB fits the
+# firmware's low bank; 3 GiB was refused ("Out of Resources"). Every page sits below 4 GiB, where the eMMC
+# controller's 32-bit DMA addresses reach.
+owned_memory_size = "0x80000000"
+# The Data seed is a raw APFS container, so the ADT carries the RAMDisk placeholder, not the packed one.
+packed_data_ramdisk = false
+# The APFS volume inside the OS window of the root image (volume "DawnUpdate21H461.J120J121J207J208OS"). The
+# generator writes it to /chosen/root-matching; the eMMC log shows the UUID the driver really finds.
+root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
+
+[device_tree]
+source = "device:dts/evb10.dts"
+include_dirs = ["soc:dts"]
+
+[components]
+include = ["ArmDTPlatform", "ArmCpu", "GopFramebuffer", "AppleKeyStoreState", "XnuPrelink", "DarwinBoot"]
+
+[adt]
+
+[adt.product]
+
+[adt.product.string]
+model = "rockchip,rk3588-evb10-v10"
+
+[adt.product.u32]
+thin-bezel = 1
+
+[adt.buttons]
+
+[adt.buttons.string]
+compatible = "buttons"
+device_type = "buttons"
+
+[adt.buttons.strings]
+button-names = ["hold", "voldown", "volup"]
+
+[adt.buttons.u32]
+home-button-type = 2

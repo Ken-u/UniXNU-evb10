@@ -1,0 +1,37 @@
+# evb10_defconfig plus the display. CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y links
+# build/native-legacy-display/libNativeLegacyDisplay.late.a (the unchanged original IOMobileFramebufferLegacy bound to
+# NativeLegacyDisplay, the GOP presenter and the AppleKeyStore stand-in) and the no-op boot-progress hooks of
+# package/LinkStubs.c. The archive is made by scripts/build-evb10-display.py from the kernel of an earlier evb10_defconfig
+# pass, so the passes run in that order (scripts/build-evb10-kernel.sh). Everything else is evb10_defconfig; the two
+# differ in the display switch and in the archive list only (the HID device and the link stubs come with the display).
+
+# --- what the ARM64 and OS profiles enable that this board does not use ------------------------------
+# The OS profile turns on the Adreno driver and the mock file system fixture; this board has a Mali
+# and boots from a real eMMC volume. The SoC fragment already switches the Qualcomm AES engine off.
+CONFIG_XNU_NATIVE_ADRENO=n
+CONFIG_XNU_SOURCE_MOCKFS=n
+CONFIG_XNU_NATIVE_MOBILE_DISPLAY=n
+CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
+CONFIG_XNU_ARMVIRT_PLATFORM=n
+# UFS: the board has eMMC (SDHCI) and PCIe NVMe, not UFS. VirtIO and the RAM block device are QEMU
+# fixtures.
+CONFIG_XNU_NATIVE_UFS=n
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK=n
+CONFIG_XNU_NATIVE_RAM_BLOCK=n
+CONFIG_XNU_NATIVE_VIRTIO_CONSOLE=n
+
+# --- drivers linked next to the kernel ----------------------------------------------------------------
+# The eMMC host (package/Rk3588Emmc, bound to the original IOBlockStorageDevice by scripts/bind-emmc-storage.py),
+# the touch panel, the Mali-G610, the HID input device and the link stubs. The base build has no switch for
+# them, so they join the link through the generic extra-archive hook.
+CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/rk3588-emmc/libRk3588Emmc.a -Wl,-force_load,{tree}/build/evb10-touch/libEvb10Touch.a -Wl,-force_load,{tree}/build/mali/libMali.a -Wl,-force_load,{tree}/build/evb10-hid/libEvb10Hid.a {tree}/build/link-stubs/libLinkStubs.a"
+
+# --- kernel facilities the port expects ----------------------------------------------------------------
+# 4 KiB signature hashes derived from verified 16 KiB blocks; no archive, no hardware assumption.
+CONFIG_XNU_NATIVE_CS_HASH_CACHE=y
+# The trust-cache runtime: without it the lock stays zeroed (a non-sleepable lck_rw_t) and the first
+# query from AMFI for the cdhash of /sbin/launchd panics ("Taking non-sleepable RW lock with
+# preemption enabled"). The two trust caches of the IPSW reach it through the payload.
+CONFIG_XNU_TRUST_CACHE_RUNTIME=y
+# Read a panic region from /chosen when the tree carries one. The generator does not emit one.
+CONFIG_XNU_DT_PANIC_REGION=n

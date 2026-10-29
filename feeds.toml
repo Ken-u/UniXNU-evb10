@@ -1,0 +1,5 @@
+[[source]]
+kind = "soc"
+name = "rk3588"
+git = "https://github.com/Ken-u/UniXNU-rk3588-common.git"
+commit = "fd55e3309b47514604c5c35718be092227ea8261"

@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+/dts-v1/;
+/include/ "rk3588.dtsi"
+
+/ {
+	model = "Rockchip RK3588 EVB10 V10 Board";
+	compatible = "rockchip,rk3588-evb10-v10", "rockchip,rk3588";
+
+	// The 4 GiB bank above 4 GiB is the one large region of the board's memory map without TF-A, OP-TEE,
+	// firmware-volume or Rockchip carve-outs (low banks: 0x00200000-0x083fffff, 0x09400000-0xefffffff).
+	memory@100000000 {
+		device_type = "memory";
+		reg = <1 0x00000000 1 0x00000000>;
+	};
+};
+
+// Console (UART2 at 1.5 Mbaud, left configured by the firmware), the eMMC host and the Mali-G610.
+// The Mali driver addresses the GPU by its fixed physical base, so its node stays disabled and is
+// not exported to the Apple device tree.
+&uart2 { status = "okay"; };
+&emmc { status = "okay"; };

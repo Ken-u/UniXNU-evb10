@@ -1,0 +1,9 @@
+# Firmware paths and SHA-256 digests for scripts/extract-files.py.
+# Files are written under .cache/firmware/.
+# Format: path|sha256. Prefix a path with - for an optional file.
+# Pass SOURCE to extract-files.py: the directory that holds the listed paths.
+
+# Mali-G610 CSF firmware (Arm Valhall, arch 10.8, 274432 bytes). It comes from the Rockchip Android vendor tree
+# (vendor/rockchip/common/gpu/MaliG610/firmware). The current linux-firmware file of the same name is a different
+# build and has not been tested here. scripts/build-mali-firmware.py turns it into package/Mali/mali_csffw.inc.
+mali_csffw.bin|8e7c821a55ca1c345cc79f61243616dd25fc35b81f090946f302886d67712df5
