@@ -1,0 +1,6 @@
+# Copy to local.toml (ignored by git) to build against local checkouts.
+# Relative paths resolve from this file; `~` and environment variables expand.
+[[source]]
+kind = "soc"
+name = "rk3588"
+local = "../UniXNU-rk3588-common"

@@ -1,0 +1,35 @@
+# Build outputs and caches (re-derivable)
+/build/
+/out/
+/.cache/
+/refer/
+/.local*/
+
+# Local configuration: addresses, accounts and paths of the machines that build and run the board
+.env
+local.toml
+
+# Local development files
+*.log
+*.swp
+*~
+.DS_Store
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+
+# Inputs, images and products that never belong in Git
+*.ipsw
+*.dmg
+*.im4p
+*.img
+*.macho
+*.o
+*.a
+*.dylib
+*.efi
+*.dtb
+*.bin
+*.pem
+*.key
