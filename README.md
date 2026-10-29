@@ -57,10 +57,11 @@ The format 2 configuration materialises, resolves and passes the porting-record 
 XNU series (ARM64, SoC, OS and device patches) applies to a fresh XNU clone, and
 `scripts/build-evb10-kernel.sh` builds both kernel passes on Linux (kernel sha256
 `56cac3bc9d5384005ec2b2919d6ce37eb8e6a72832568b51c0f6eb784dadf210`). The results recorded in
-`porting.toml` were observed on the board with an earlier repository layout: UEFI to XNU, the eMMC
-root and persistent Data volume, eight cores, the lock screen on the VOP2 panel, touch and
-Mali-composited graphics. They are recorded as `implemented`, not `device-verified`, until an image
-built from this layout has been booted (the kernel builds; no payload was assembled or booted from it).
+`porting.toml` were first observed with an earlier repository layout. On 2026-10-29 every piece was rebuilt
+from the pushed repositories in an empty directory ([`docs/reproduce.md`](docs/reproduce.md)) and booted: eMMC root and
+Data, eight cores, `launchd` with about 110 processes, SpringBoard and backboardd, Mali-composited frames
+(`vkpipe failed=0`) and no panic over a 130 s capture. The panel image and touch were not looked at in that run, so the
+areas stay `implemented` rather than `device-verified`.
 
 Open items: GPU frame time while scrolling (about 100 ms), fixed GPU and CPU clocks, interrupt-driven
 GPU completion, network, audio and power management.

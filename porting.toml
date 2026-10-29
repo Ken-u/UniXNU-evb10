@@ -4,7 +4,7 @@ schema_version = 1
 name = "evb10"
 soc = "RK3588"
 os_profile = "ipados-17.7.11-21H461"
-summary = "Rockchip RK3588 EVB10 V10 runs the iPadOS 17.7.11 userland on a source-built XNU, started from edk2-rk3588 firmware (uefi-evb10). Shared SoC support is in UniXNU-rk3588-common; this repository owns the memory layout, the eMMC root, the VOP2 display, touch, the Mali-G610 integration and the packaging. Areas in scope are recorded as implemented: the results below were observed on the board with the previous repository layout and have not been repeated with this one."
+summary = "Rockchip RK3588 EVB10 V10 runs the iPadOS 17.7.11 userland on a source-built XNU, started from edk2-rk3588 firmware (uefi-evb10). Shared SoC support is in UniXNU-rk3588-common; this repository owns the memory layout, the eMMC root, the VOP2 display, touch, the Mali-G610 integration and the packaging. Areas in scope are recorded as implemented: the results below were observed with the previous repository layout; a rebuild of everything from these repositories was booted on 2026-10-29 (see docs/reproduce.md), without a look at the panel or touch."
 
 [[area]]
 id = "configuration"
