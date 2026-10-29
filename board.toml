@@ -148,6 +148,15 @@ include = ["ArmDTPlatform", "ArmCpu", "GopFramebuffer", "AppleKeyStoreState", "X
 
 [adt]
 
+[adt.defaults]
+
+# sleep-disabled: suspend and resume are not implemented. vmm-present backs sysctl kern.hv_vmm_present, which
+# makes watchdogd (no hardware watchdog it could drive) exit cleanly; without it watchdogd traps, launchd restarts
+# it and the kernel panics when the third instance dies. kern.maxvnodes comes from the OS profile.
+[adt.defaults.u32]
+sleep-disabled = 1
+vmm-present = 1
+
 [adt.product]
 
 [adt.product.string]
