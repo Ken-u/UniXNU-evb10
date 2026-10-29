@@ -63,5 +63,9 @@ Data, eight cores, `launchd` with about 110 processes, SpringBoard and backboard
 (`vkpipe failed=0`) and no panic over a 130 s capture. The panel image and touch were not looked at in that run, so the
 areas stay `implemented` rather than `device-verified`.
 
-Open items: GPU frame time while scrolling (about 100 ms), fixed GPU and CPU clocks, interrupt-driven
-GPU completion, network, audio and power management.
+Scrolling the home screen gets about 50 frames per second in the steady state (the best swipe 58) with the
+boot-arguments of the frame-rate runs (zero-copy scanout with the GPU fence, the GPU at 750 MHz, the device's
+YCbCr filter; MaliMetal's `docs/notes.zh-CN.md`, "帧率"); the default `kernel_args` still scan out through a copy
+with the GPU at 198 MHz. Open items: the last few milliseconds of the heavy frames at the start of a swipe
+(the render server's encoding thread), fixed GPU and CPU clocks, interrupt-driven GPU completion, network, audio
+and power management.
