@@ -1,6 +1,6 @@
 --- a/osfmk/kern/bsd_kern.c
 +++ b/osfmk/kern/bsd_kern.c
-@@ -1526,3 +1526,664 @@
+@@ -1526,3 +1526,667 @@
  		return KERN_FAILURE;
  	}
  }
@@ -256,7 +256,7 @@
 +extern volatile uint32_t armcpu_smp_requested, armcpu_smp_running, armcpu_smp_conduit;
 +extern volatile uint32_t armcpu_smp_step[8], armcpu_smp_fail[8], armcpu_core_timer[8], armcpu_core_sgi[8];
 +extern volatile int32_t armcpu_smp_psci_rc[8];
-+/* Reset-path breadcrumbs of the secondary cores, 8 u64 per core (osfmk/arm64/start.s, evb10-smp-el2.patch). */
++/* Reset-path breadcrumbs of the secondary cores, 16 u64 (128 bytes) per core (osfmk/arm64/start.s, rk3588-smp-el2.patch). */
 +extern volatile uint64_t rk3588_smp_trace[];
 +
 +/* ArmCpu's IPI evidence and its read-only GIC probe (UniXNU/drivers/ArmCpu/ArmCpu.cpp). */
@@ -620,19 +620,22 @@
 +		/*
 +		 * Breadcrumbs the reset path (osfmk/arm64/start.s) stores for each core with its MMU off. Written straight
 +		 * to memory, so drop whatever this CPU has cached of them first. stage: 1 reset_vector, 2 at EL1, 3 cpu data
-+		 * found, 4 start_cpu, 5 about to enable the MMU. el is CurrentEL (8 = EL2, 4 = EL1) at entry / after the drop.
++		 * found, 4 start_cpu, 5 about to enable the MMU (with TTBR1, TCR and TTBR0 as they stand then). el is CurrentEL (8 = EL2, 4 = EL1)
++		 * at entry / after the drop.
 +		 */
 +		/* Once every core is up the first dump has said it all; keep printing only while a core is missing. */
 +		static bool evb10_trace_done;
 +
 +		for (int core = 1; core < 8 && !evb10_trace_done; core++) {
-+			volatile uint64_t *t = &rk3588_smp_trace[core * 8];
++			volatile uint64_t *t = &rk3588_smp_trace[core * 16];
 +
 +			__asm__ volatile ("dc civac, %0" :: "r" (t) : "memory");
++			__asm__ volatile ("dc civac, %0" :: "r" (t + 8) : "memory");
 +			__asm__ volatile ("dsb sy" ::: "memory");
 +			if ((uint32_t)t[0] != 0) {
-+				printf("evb10: smp trace core %d stage %u el %#llx/%#llx mpidr %#llx cpudata %#llx handler %#llx sctlr %#llx\n",
-+				    core, (uint32_t)t[0], t[1], t[3], t[2], t[4], t[5], t[6]);
++				/* ttbr1 / tcr of zero at stage 5: the core read stale memory for cpu_ttep / sysreg_restore (ArmCpu.cpp, startCPU). */
++				printf("evb10: smp trace core %d stage %u el %#llx/%#llx mpidr %#llx cpudata %#llx handler %#llx sctlr %#llx ttbr1 %#llx tcr %#llx ttbr0 %#llx\n",
++				    core, (uint32_t)t[0], t[1], t[3], t[2], t[4], t[5], t[6], t[7], t[8], t[9]);
 +			}
 +		}
 +		if (armcpu_smp_running >= (uint32_t)max) {
