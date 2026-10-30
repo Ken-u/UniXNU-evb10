@@ -1,0 +1,35 @@
+EVB10 GPU evidence, run v2: the GPU at 1 GHz
+============================================
+
+Excerpts of serial captures of the board. Lines are copied unchanged (time stamps are seconds since the capture
+started; lines longer than 200 characters are cut, NUL bytes dropped); the lines between the excerpts are left out.
+The raw captures are not stored in the repository (logs and images are ignored); each command below repeats its run.
+
+Device      Rockchip RK3588 EVB10 V10, UART2 console at 1.5 Mbaud
+Capture     2026-10-30 12:38:08, 235 s
+Command     cd uefi-evb10 && env -i HOME=$HOME USER=$USER PATH=/usr/local/bin:/usr/bin:/bin GPU_RAIL_UV=850000 ./build.sh && tools/stub/build.sh &&
+            CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS="mali-pll=3 mali-div=0 mali-npll=1000 evb10-touch-demo=120 mali-timeline=1" tools/xnu-probe/run-kernel.sh v2
+Firmware    uefi-evb10 94ec4bd00d4d755623ce6cedd84172cbcd238dbd built with GPU_RAIL_UV=850000 (GPU rail 0.85 V)
+Kernel      UniXNU-evb10 833f90fb52890090ad2bdd79285cc527b00d3ead, UniXNU-rk3588-common bff921845d3e72151e6b6cda528cd80eb652b70a; same kernel.macho and Metal add-on as run v1
+
+1. Clock and rail
+-----------------
+[   4.976] UEFI firmware (version 0 built at 04:31:34 on Oct 30 2026)
+[  22.361] mali: npll 850000 kHz (locked 1; con 0x1a9 0x83 0xffff0000, status 0xa400)
+[  22.370] mali: mali-npll=1000: m 425 -> 500, npll now 1000000 kHz (locked 1, con 0x1f4 0x83)
+[  22.370] mali: clocks now:    sel158 0x1f60 gate66 0x4 (npll / 1 = 1000000 kHz)
+[  22.419] mali: clock probe: 21007815 GPU cycles in 21007 us = 1000 MHz (timestamp register 044ad5205)
+
+2. Result
+---------
+[  78.060] mali: user: status: vkpipe n=26 failed=0 total=65ms max=7ms, messages info 0 warning 22, cache hit 26 miss 0
+[ 228.466] mali: user: status: vkpipe n=75 failed=0 total=121ms max=7ms, messages info 0 warning 85, cache hit 75 miss 0
+
+run        CBs ctc p50     p90     p99  >19.3ms rep p50  rep p90    on A55  gpu50  sub50
+v2         511    12.7    15.6    21.1     2.5%     4.1      5.1     9/511     7.9    0.9
+
+v2: touch -> first command buffer: left median   62 ms [69, 53, 62, 53, 62, 175] | right median  168 ms [177, 168, 168, 141, 156]
+    touch -> first animated frame: left median   89 ms [100, 74, 91, 89, 89] | right median  185 ms [203, 185, 209, 156, 180]
+
+  mean over 12 moving gestures: 48.8 fps while the finger is down; median CB gpu 7.5 ms
+  gestures 3-11 (9): 53.8 fps, 4 gaps > 25 ms, 58.8 fps best, median CB gpu 7.5 ms

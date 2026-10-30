@@ -1,0 +1,22 @@
+EVB10 touch evidence, run tk4: the touch bus at 400 kHz
+========================================================
+
+Excerpts of serial captures of the board. Lines are copied unchanged (time stamps are seconds since the capture
+started; lines longer than 200 characters are cut, NUL bytes dropped); the lines between the excerpts are left out.
+The raw captures are not stored in the repository (logs and images are ignored); each command below repeats its run.
+
+Device      Rockchip RK3588 EVB10 V10, UART2 console at 1.5 Mbaud
+Capture     2026-10-30 11:29:55, 75 s
+Command     cd uefi-evb10 && EXTRA_KERNEL_ARGS="evb10-touch-khz=400" tools/xnu-probe/run-kernel.sh tk4
+Revision    UniXNU-evb10 11d08ffb699a5a3e8140b27d0dc943ff5b129986
+Scope       the bus only: no finger was on the panel in this run
+
+1. Controller and bus
+---------------------
+[  46.073] evb10: touch: I2C5 version 5, clock 200000000 Hz, SCL 400 kHz, CLKDIV 00160027
+[  46.206] evb10: touch: I2C5 scan: 2 device(s) answer: 0x14 0x5d
+[  46.210] evb10: touch: Goodix at 0x14, product id 1158 (31 31 35 38), configured 800x480, 10 contacts
+[  57.319] evb10: touch: t+10s frames 0 with contact 0 errors 0 last raw (0,0) status reads 0 last 0x00 INT 0, HID reports 0
+[  57.319] evb10: touch: tick 150 us on average, 191 us at most (1000 ticks)
+[  68.473] evb10: touch: t+20s frames 0 with contact 0 errors 0 last raw (0,0) status reads 0 last 0x00 INT 0, HID reports 0
+[  68.473] evb10: touch: tick 149 us on average, 156 us at most (2000 ticks)

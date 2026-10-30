@@ -4,13 +4,13 @@ schema_version = 1
 name = "evb10"
 soc = "RK3588"
 os_profile = "ipados-17.7.11-21H461"
-summary = "Rockchip RK3588 EVB10 V10 runs the iPadOS 17.7.11 userland on a source-built XNU, started from edk2-rk3588 firmware (uefi-evb10). Shared SoC support is in UniXNU-rk3588-common; this repository owns the memory layout, the eMMC root, the VOP2 display, touch, the Mali-G610 integration and the packaging. Areas in scope are recorded as implemented: the results below were observed with the previous repository layout; a rebuild of everything from these repositories was booted on 2026-10-29 (see docs/reproduce.md), without a look at the panel or touch."
+summary = "Rockchip RK3588 EVB10 V10 runs the iPadOS 17.7.11 userland on a source-built XNU, started from edk2-rk3588 firmware (uefi-evb10). Shared SoC support is in UniXNU-rk3588-common; this repository owns the memory layout, the eMMC root, the VOP2 display, touch, the Mali-G610 integration and the packaging. Every area in scope is device-verified on the board with a system built from these repositories (docs/reproduce.md): it boots to SpringBoard with the eMMC root and the Data volume mounted, the Mali composites the interface at about 50 frames per second while scrolling, and the panel and the touch screen were checked by hand and work normally. Not done: GPU and CPU frequency control, interrupt-driven GPU completion, network, audio and power management."
 
 [[area]]
 id = "configuration"
-status = "implemented"
+status = "device-verified"
 components = []
-paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", ".gitignore", ".env.example", "local.toml.example", "unixnu.lock", "LICENSE", ".gitattributes", "scripts/build-evb10-kernel.sh", "scripts/build-evb10-drivers.py", "scripts/host/**", "docs/reproduce.md"]
+paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", ".gitignore", ".env.example", "local.toml.example", "unixnu.lock", "LICENSE", ".gitattributes", "scripts/build-evb10-kernel.sh", "scripts/build-evb10-drivers.py", "scripts/host/**", "docs/reproduce.md", "evidence/**"]
 inputs = ["ARM64 profile, rk3588 SoC source pinned in feeds.toml, iPadOS 17.7.11 build 21H461 profile, evb10_defconfig and evb10_display_defconfig, submodules package/Mali and package/Rk3588Emmc."]
 configuration = ["board.soc_source = rk3588; board.os_profile = ipados-17.7.11-21H461; schema_version = 2.", "kernel.config_fragments = arch common, soc rk3588, os ipados; the defconfig applies last and switches off what the OS profile enables for other hardware (NATIVE_ADRENO, SOURCE_MOCKFS).", "kernel.patch_series = arch, soc, os, device in that order.", "payload.kernel_args carries the frame-rate group as defaults: zero-copy scanout with the GPU job as the fence (evb10-vop-direct=1, evb10-vop-fence=1), the GPU at 750 MHz (mali-pll=1, mali-div=1), the device's YCbCr filter (mali-ycbcr-filter=device), asynchronous surface flush (mali-aflush=1), cpumask=31, mali-epri=50 and sched-slowcpus=240; the comment above the list says what each one does."]
 procedure = ["From the UniXNU checkout run ./unixnu defconfig evb10_defconfig -D ../UniXNU-evb10, then ./unixnu fetch and ./unixnu status --json with the same -D.", "For a local SoC checkout copy local.toml.example to local.toml.", "Run scripts/build-evb10-kernel.sh for the two-pass kernel build."]
@@ -26,14 +26,14 @@ result = "Implementation and configuration described in this section"
 
 [[area.evidence]]
 kind = "device"
-reference = "board.toml"
+reference = "evidence/boot-v1-20261030.txt"
 result = "Boot with the committed default arguments (run v1): GPU 750 MHz by the cycle counter, Cortex-A76 cores at 2.23 GHz, 504 heavy command buffers took 14.9 ms (median) and 18.9 ms (90th percentile) from commit to completion, 52.6 frames per second with the finger down in the scripted swipes 3 to 11, no panic and no stalled GPU group in a 235 s capture"
 command = "cd uefi-evb10 && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS=\"evb10-touch-demo=120 mali-timeline=1\" tools/xnu-probe/run-kernel.sh v1; python3 tools/xnu-probe/cb_table.py v1 --latency; python3 tools/xnu-probe/frame_phases.py v1"
 revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"
 
 [[area]]
 id = "firmware"
-status = "implemented"
+status = "device-verified"
 components = []
 paths = ["proprietary-files.txt", "scripts/extract-files.py", "scripts/build-mali-firmware.py"]
 inputs = ["edk2-rk3588 firmware built by uefi-evb10 (SPI NOR image), TF-A at EL3 with PSCI over SMC, UEFI GOP frame buffer and the Mali CSF firmware listed in proprietary-files.txt."]
@@ -49,9 +49,16 @@ kind = "source"
 reference = "proprietary-files.txt"
 result = "Firmware inputs and their digests"
 
+[[area.evidence]]
+kind = "device"
+reference = "evidence/boot-v1-20261030.txt"
+result = "UEFI built from uefi-evb10 94ec4bd with the GPU rail at 0.75 V started from U-Boot's fastboot, the UniXNU menu booted the xnu entry, DarwinBoot published the 640x480 GOP frame buffer and kept the reserved regions of the device tree, boot services ended at 20.8 s and the kernel printed 'kprintf initialized' 0.4 s later (run v1)"
+command = "cd uefi-evb10 && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS=\"evb10-touch-demo=120 mali-timeline=1\" tools/xnu-probe/run-kernel.sh v1"
+revision = "94ec4bd00d4d755623ce6cedd84172cbcd238dbd"
+
 [[area]]
 id = "cpu"
-status = "implemented"
+status = "device-verified"
 components = ["ArmCpu", "ArmDTPlatform"]
 paths = ["scripts/*armcpu*"]
 inputs = ["Four Cortex-A55 and four Cortex-A76 at affinities 0x000 to 0x700, GICv3 at 0xfe600000 with redistributors at 0xfe680000 (128 KiB stride), 24 MHz architected timer, PSCI over SMC."]
@@ -67,9 +74,16 @@ kind = "source"
 reference = "dts/evb10.dts"
 result = "Board device tree on top of the shared SoC description"
 
+[[area.evidence]]
+kind = "device"
+reference = "evidence/boot-v1-20261030.txt"
+result = "The four Cortex-A76 cores reported running at 2230, 2230, 2223 and 2223 MHz with cpumask=31 and sched-slowcpus=240 on the command line; the render server's encoding thread ran on the Cortex-A55 core for 6 of the 504 heavy command buffers and on an A76 core for the other 498, with no panic in 235 s (run v1)"
+command = "cd uefi-evb10 && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS=\"evb10-touch-demo=120 mali-timeline=1\" tools/xnu-probe/run-kernel.sh v1; python3 tools/xnu-probe/cb_table.py v1 --latency"
+revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"
+
 [[area]]
 id = "memory"
-status = "implemented"
+status = "device-verified"
 components = []
 paths = ["dts/**", "patches/xnu/evb10-vc-mirror.patch"]
 inputs = ["DRAM bank 0x1_00000000 with size 0x1_00000000 in the firmware memory map, 2 GiB owned window for the kernel, eMMC controller with 32-bit DMA."]
@@ -85,27 +99,41 @@ kind = "source"
 reference = "dts/evb10.dts"
 result = "Memory node and handoff window"
 
+[[area.evidence]]
+kind = "device"
+reference = "evidence/boot-v1-20261030.txt"
+result = "The hand-off kept cma, drm-logo, vendor-storage and ramoops reserved and gave the kernel a window of 0x80000000 bytes; the eMMC reads (111 block requests, 0 failures), the VOP2 scanout behind its IOMMU (paging on) and the Mali jobs ran inside it for 235 s without a fault or a panic (run v1)"
+command = "cd uefi-evb10 && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS=\"evb10-touch-demo=120 mali-timeline=1\" tools/xnu-probe/run-kernel.sh v1"
+revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"
+
 [[area]]
 id = "storage"
-status = "implemented"
+status = "device-verified"
 components = ["AppleKeyStoreState"]
 paths = ["package/Rk3588Emmc", "scripts/bind-emmc-storage.py", "scripts/audit-evb10-storage.py", "scripts/peek-root-image.py", "scripts/data/**", "patches/xnu/evb10-userland-mounts.patch", "patches/tools/evb10-userland-mounts.c.inc", "patches/tools/make-patches.py"]
 inputs = ["DesignWare MSHC at 0xfe2e0000, 8-bit eMMC, GPT with userdata at LBA 8459264 to 122142655 (512-byte blocks), SHNGROOT manifest image written by unixnu build userdata."]
 configuration = ["userdata.first_lba, last_lba and windows (OS, SystemOS) describe the root image.", "Kernel arguments: emmc=4, emmc-root-trust=1, emmc-systemos-union=1, emmc-data-mount=1, emmc-data-size=2048, emmc-data-persist=1.", "payload.adt.root_match_volume_uuid names the OS volume; packed_data_ramdisk = false."]
 procedure = ["Build with build-evb10-drivers.py Rk3588Emmc followed by bind-emmc-storage.py; regenerate scripts/data/evb10-storage-interface-audit.json with audit-evb10-storage.py when the kernelcache pin changes.", "scripts/peek-root-image.py reads the manifest of a userdata image without a board."]
-findings = ["The driver subclasses the original IOBlockStorageDevice, so its archive is made by binding the object to the original code at audited addresses.", "Only the last 2049 MiB of userdata, the Data window, is ever written: the first start formats it and the kernel copies /private/var once, after which restarts mount it. Writes showed zero failures in the observed runs.", "A 256 MiB Data volume ran out of space (ENOSPC) and stalled SpringBoard; 512 MiB was enough to reach the lock screen, 2048 MiB is the configured size. vnode jetsam killed daemons until /defaults/kern.maxvnodes was set to 66560, which the OS profile now provides.", "The tools directory is split by owner: the thread-sample include belongs to the diagnostics area, while the userland-mounts include keeps, next to the mounts, the periodic process table and the screenshot over the serial line."]
+findings = ["The driver subclasses the original IOBlockStorageDevice, so its archive is made by binding the object to the original code at audited addresses.", "Only the last 2049 MiB of userdata, the Data window, is ever written: the first start formats it and the kernel copies /private/var once, after which restarts mount it. Writes showed zero failures in the observed runs.", "A 256 MiB Data volume ran out of space (ENOSPC) and stalled SpringBoard; 512 MiB was enough to reach the lock screen, 2048 MiB is the configured size. vnode jetsam killed daemons until /defaults/kern.maxvnodes was set to 66560, which the OS profile now provides.", "The tools directory is split by owner: the thread-sample include belongs to the diagnostics area, while the userland-mounts include keeps, next to the mounts, the periodic process table and the screenshot over the serial line.", "The Data window is a persistent volume: the kernel keeps the tree and preferences of earlier boots (evb10: Data: persistent volume, seeded by an earlier boot) and, because a run ends by resetting the board, mounts the container after an unclean unmount by reloading its newest checkpoint."]
 completion = ["The root volume mounts read-only from the OS window and the Data volume mounts read-write across restarts."]
-limits = ["Only eMMC is supported; PCIe NVMe is not used. The kernel of the format 2 layout builds, but a payload from it has not been written to the board."]
-next_action = ["Assemble a payload from the rebuilt kernel and repeat the persistence check across restarts."]
+limits = ["Only eMMC is supported; PCIe NVMe is not used. Every run ends by resetting the board, so the Data container has always been mounted after an unclean unmount; a mount after an orderly shutdown was not exercised."]
+next_action = ["Repeat the persistence check after a clean unmount, which no run has exercised."]
 
 [[area.evidence]]
 kind = "source"
 reference = "scripts/bind-emmc-storage.py"
 result = "Binding of the eMMC block device to the original storage class"
 
+[[area.evidence]]
+kind = "device"
+reference = "evidence/boot-v1-20261030.txt"
+result = "The SystemOS window is published read-only (111 block requests, 0 failures), the root volume of the OS window is accepted read-only, the 2 GiB Data window is published writable and /private/var mounts on it as a persistent volume. Across 56 boots of 2026-10-30, each run ending by a board reset, the transaction id of the Data container rose from 10018 to 16586 and 47 of the boots recovered it after an unclean unmount (run v1 and the table in the log)"
+command = "cd uefi-evb10 && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS=\"evb10-touch-demo=120 mali-timeline=1\" tools/xnu-probe/run-kernel.sh v1"
+revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"
+
 [[area]]
 id = "display"
-status = "implemented"
+status = "device-verified"
 components = ["GopFramebuffer"]
 paths = ["package/Evb10Display/**", "package/LegacyDisplayProbe.cpp", "package/Evb10Console.h", "package/LinkStubs.c", "package/KeyStoreProbe.cpp", "scripts/build-native-legacy-display.py", "scripts/build-evb10-display.py", "scripts/build-display-abi.py", "scripts/build-link-stubs.py", "configs/evb10_display_defconfig"]
 inputs = ["VOP2 with the Esmart3 window on the DSI panel, 1080x1920; UEFI GOP frame buffer; original IOMobileFramebufferLegacy bound to NativeLegacyDisplay."]
@@ -121,9 +149,23 @@ kind = "source"
 reference = "package/Evb10Display/NativeLegacyDisplay.cpp"
 result = "VOP2 scanout presenter"
 
+[[area.evidence]]
+kind = "device"
+reference = "evidence/boot-v1-20261030.txt"
+result = "Checked by hand on the board (reported 2026-10-30): the panel works normally"
+command = "cd uefi-evb10 && tools/xnu-probe/run-kernel.sh TAG, then look at the panel"
+revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"
+
+[[area.evidence]]
+kind = "device"
+reference = "evidence/boot-v1-20261030.txt"
+result = "The kernel frame buffer (1072x1904) is scanned out by VOP2 behind its IOMMU and the display gap log shows 16.6 ms between frames: 52.6 frames per second with the finger down in the scripted swipes 3 to 11 (run v1)"
+command = "cd uefi-evb10 && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS=\"evb10-touch-demo=120 mali-timeline=1\" tools/xnu-probe/run-kernel.sh v1; python3 tools/xnu-probe/frame_phases.py v1"
+revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"
+
 [[area]]
 id = "input"
-status = "implemented"
+status = "device-verified"
 components = []
 paths = ["package/Evb10Touch/**", "package/Evb10Hid/**", "package/Evb10HidProbe.cpp", "scripts/build-evb10-hid.py"]
 inputs = ["Goodix GT1158 on I2C5, polled; coordinate grid 720x1280 on a 1080x1920 panel."]
@@ -131,7 +173,7 @@ configuration = ["Kernel arguments evb10-touch=1, evb10-touch-xmax=720, evb10-to
 procedure = ["Boot and watch the evb10: touch lines on the console; touch the panel and check the pointer in SpringBoard."]
 findings = ["The controller reports a configured 800x480 but delivers X 9..696 and Y 10..1270: the real grid is 720x1280.", "The input device is one HID device on the IOHIDResource; the original IOHIDEventDriver attaches to it and feeds backboardd.", "The poll runs as a thread call at priority 93 about every 11.5 ms and the master busy-waits: at 100 kHz one tick costs 535 us on average (the slowest tick of a window of 1000 was 1.2 to 6.4 ms when it was preempted), about 4.6 % of a fast core; at 400 kHz it costs 150 us (191 us at most). The kernel prints the average and the maximum every 1000 ticks.", "At 400 kHz the bus scan still sees 0x14 and 0x5d, reads Goodix product id 1158 and ten touch points, and counts no bus errors."]
 completion = ["Touch coordinates map to the panel and SpringBoard reacts."]
-limits = ["No keyboard, buttons or pen; the controller is polled every 10 ms. The 400 kHz setting was checked on the bus only: a finger on the panel at that speed was not tried (a test that needs a person)."]
+limits = ["No keyboard, buttons or pen; the controller is polled every 10 ms. The 400 kHz setting was checked on the bus only: a finger on the panel at that speed was not tried."]
 next_action = ["Use the controller interrupt instead of polling."]
 
 [[area.evidence]]
@@ -141,14 +183,28 @@ result = "I2C master and touch controller driver"
 
 [[area.evidence]]
 kind = "device"
-reference = "package/Evb10Touch/Evb10Touch.cpp"
+reference = "evidence/touch-400khz-tk4-20261030.txt"
 result = "With evb10-touch-khz=400 the poll tick took 150 us on average and 191 us at most over 1000 ticks, the I2C scan found 0x14 and 0x5d, the controller reported product id 1158, and there were no bus errors (run tk4)"
 command = "cd uefi-evb10 && EXTRA_KERNEL_ARGS=\"evb10-touch-khz=400\" tools/xnu-probe/run-kernel.sh tk4"
 revision = "11d08ffb699a5a3e8140b27d0dc943ff5b129986"
 
+[[area.evidence]]
+kind = "device"
+reference = "evidence/boot-v1-20261030.txt"
+result = "Checked by hand on the board (reported 2026-10-30): the touch screen works normally"
+command = "cd uefi-evb10 && tools/xnu-probe/run-kernel.sh TAG, then touch the screen"
+revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"
+
+[[area.evidence]]
+kind = "device"
+reference = "evidence/boot-v1-20261030.txt"
+result = "The Goodix GT1158 answered at 0x14 on I2C5 at 100 kHz (product id 1158, axes 720x1280 mapped to 1080x1920), a poll tick took 536 us on average, and 352 HID reports by t+130 s drove the scripted swipes on the home screen (run v1)"
+command = "cd uefi-evb10 && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS=\"evb10-touch-demo=120 mali-timeline=1\" tools/xnu-probe/run-kernel.sh v1"
+revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"
+
 [[area]]
 id = "gpu"
-status = "implemented"
+status = "device-verified"
 components = []
 paths = ["package/Mali", "package/KeyStoreProbe.cpp"]
 inputs = ["Mali-G610 (Valhall CSF) at 0xfb000000, CSF firmware from proprietary-files.txt, MaliMetal user-space stack (PanVK, metal2vulkan, Metal plug-in)."]
@@ -156,7 +212,7 @@ configuration = ["Kernel arguments mali=8 and mali-metal=1; evb10-gpu-addon=1 ma
 procedure = ["Provide the firmware, build the kernel, then build the user-space stack from MaliMetal and the add-on it describes."]
 findings = ["The stack composites the iPadOS lock screen on the Mali: backboardd, AGXAccelerator, NativeMaliMetal, metal2vulkan, PanVK and the Mali driver.", "PanVK counts a colour attachment with write mask 0 as written; a Mesa patch in MaliMetal fixes the black rectangle behind the lock screen clock.", "Scrolling the home screen with the frame-rate arguments, now the defaults of board.toml, gets about 50 frames per second in the steady state on the board, 58 at best; the scripted swipes 3 to 11 of run v1 gave 52.6 frames per second with the finger down and 57.5 at best.", "The heavy render passes scale with the GPU clock (84.9, 28.4 and 22.5 ms at 198, 594 and 750 MHz). The wallpaper pass was metal2vulkan's bit-exact YCbCr filter (about 570 instructions a sample), not memory: the device's own linear filter takes it from 22.5 to 7.9 ms.", "PanVK let a draw kill the fragments of earlier draws only if it wrote every bound colour attachment, which CoreAnimation's passes never do (they bind a write-masked memoryless second one). A Mesa patch in MaliMetal lets a draw kill when its write set covers the earlier draw's: a matrix of nine write-set pairs on the board shows the pixels only the earlier draw writes never differ, and the median command-buffer GPU time falls from 14.1 to 9.7 ms.", "What is left of a heavy frame is on the CPU: the render server's encoding thread replays the command buffer (4 ms on a Cortex-A76, 11 ms on an A55) and submits it (1.4 ms) before the GPU starts, 0.7 ms after the submit returns.", "A heavy command buffer (50 draws or more) has to go from commit to completion in about 19.3 ms to be shown on the second vsync after it. At 750 MHz the 504 of run v1 took 14.9 ms (median) and 18.9 ms (90th percentile) and 8.7 % were over 19.3 ms; at 1 GHz (run v2) 12.7 and 15.6 ms and 2.5 % (1.6 % in an earlier run); the median GPU time of a heavy command buffer is 10.1 ms at 750 MHz and 7.9 ms at 1 GHz.", "The encoding thread landed on a Cortex-A55 for 8 % of the heavy command buffers (replay 11 to 14 ms instead of 4 ms), the main source of late frames. Listing the Cortex-A76 cores first, raising the thread's priority to 50 (mali-epri) and keeping user-interface threads off idle slow cores (sched-slowcpus) together bring that to 0.5 to 1.8 %; neither of the last two helps alone.", "mali-npll=1000 retunes NPLL before the GPU is switched onto it and needs the GPU rail at 0.85 V (vendor operating points: 0.75 V up to 800 MHz, 0.85 V for 1 GHz), so the firmware is built with GPU_RAIL_UV=850000; 750 MHz at 0.75 V is the default. A 12-minute capture at 1 GHz (81 scripted swipes, 3553 heavy command buffers) ended without a panic or a stalled group and with vkpipe failed=0 throughout.", "From the start of a swipe to the first command buffer takes about 60 ms for a left swipe and 150 to 170 ms for a right swipe at every GPU clock. The CPU times of the processes suggest the Today View widgets are rendered on each right swipe (WidgetRenderer_Default used 0.17 s of CPU per 13 s of swiping against 0.003 s idle), but no thread stack was taken to confirm it."]
 completion = ["The lock screen and its animations render on the Mali at a steady frame rate."]
-limits = ["No DVFS: the GPU clock is fixed (750 MHz by default at the 0.75 V the firmware sets; 1 GHz with a firmware built for 0.85 V, not tried on the 0.75 V rail); no interrupt-driven completion (waits poll), at most eight groups. At 750 MHz 8.7 % of the heavy command buffers miss their 19.3 ms deadline (1.6 to 2.5 % at 1 GHz) and a right swipe starts about 100 ms later than a left one. Whether the panel looks smooth at this rate has not been judged by a person."]
+limits = ["No DVFS: the GPU clock is fixed (750 MHz by default at the 0.75 V the firmware sets; 1 GHz with a firmware built for 0.85 V, not tried on the 0.75 V rail); no interrupt-driven completion (waits poll), at most eight groups. At 750 MHz 8.7 % of the heavy command buffers miss their 19.3 ms deadline (1.6 to 2.5 % at 1 GHz) and a right swipe starts about 100 ms later than a left one. The panel was checked by hand and works normally (see Display)."]
 next_action = ["Submit a command buffer while it is still being replayed, find what SpringBoard does in the 100 ms after a right swipe starts, and move completion to the GPU interrupts."]
 
 [[area.evidence]]
@@ -166,9 +222,16 @@ result = "Mali driver source is the package/Mali submodule"
 
 [[area.evidence]]
 kind = "device"
-reference = "docs/reproduce.md"
+reference = "evidence/gpu-1ghz-v2-20261030.txt"
 result = "The 1 GHz steps of docs/reproduce.md with a firmware built from uefi-evb10 94ec4bd with GPU_RAIL_UV=850000 (run v2): the console shows npll 1000000 kHz locked, the cycle counter reads 1000 MHz, 511 heavy command buffers took 12.7 ms (median) and 15.6 ms (90th percentile), 2.5 % were over 19.3 ms, 53.8 frames per second with the finger down in swipes 3 to 11, no panic and no stalled GPU group in 235 s"
 command = "cd uefi-evb10 && env -i HOME=$HOME USER=$USER PATH=/usr/local/bin:/usr/bin:/bin GPU_RAIL_UV=850000 ./build.sh && tools/stub/build.sh && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS=\"mali-pll=3 mali-div=0 mali-npll=1000 evb10-touch-demo=120 mali-timeline=1\" tools/xnu-probe/run-kernel.sh v2; python3 tools/xnu-probe/cb_table.py v2 --latency"
+revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"
+
+[[area.evidence]]
+kind = "device"
+reference = "evidence/boot-v1-20261030.txt"
+result = "Boot with the committed default arguments: the Mali at 750 MHz (cycle counter) composited the interface for backboardd and SpringBoard, vkpipe n=76 failed=0, 504 heavy command buffers took 14.9 ms (median) and 18.9 ms (90th percentile) from commit to completion, 52.6 frames per second with the finger down in the scripted swipes 3 to 11, no panic in 235 s (run v1)"
+command = "cd uefi-evb10 && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS=\"evb10-touch-demo=120 mali-timeline=1\" tools/xnu-probe/run-kernel.sh v1; python3 tools/xnu-probe/cb_table.py v1 --latency; python3 tools/xnu-probe/frame_phases.py v1"
 revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"
 
 [[area]]
@@ -215,7 +278,7 @@ evidence = []
 
 [[area]]
 id = "packaging"
-status = "implemented"
+status = "device-verified"
 components = ["XnuPrelink", "DarwinBoot"]
 paths = ["patches/xnu/**", "patches/tools/**", "package/**", "feeds.toml"]
 inputs = ["XNU of the OS profile, ARM64, SoC and device patch series, generated Apple device tree, payload volume of 96 MiB, owner trust-cache digests."]
@@ -223,17 +286,24 @@ configuration = ["payload.* in board.toml and the [adt] tables; the device tree 
 procedure = ["Run scripts/build-evb10-kernel.sh, then ./unixnu build payload with --unique-chip-id."]
 findings = ["A rebuild from the six pushed repositories in an empty directory (docs/reproduce.md) reaches launchd with about 110 processes and Mali-composited frames; the feeds.toml pin of the SoC repository has to include the dts change that stops exporting interrupts on the eMMC and UART nodes, because an exported interrupts property without AAPL,phandle makes IOKit start-up take a data abort. The second trust_cache_sha256 entry changes with every rebuild because the user-space binaries are not bit-for-bit reproducible.", "The device series must not touch the context of the hunks of earlier series: the userland-mounts patch is generated by patches/tools/make-patches.py from a tree that has the earlier series applied.", "The Mali driver carries weak fallbacks for the display driver's GPU hand-off, because the display-less pass links it too (kernel patches call its test hooks); the display archive's strong definitions replace them.", "Changing the XNU patch list recreates the prepared source tree, and preparing it downloads the DriverKit headers the feed leaves out, so that rebuild needs network access (through the proxy, if there is one, even when the build runs under env -i).", "Each defconfig name is its own output directory (out/evb10/<os>/evb10 and .../evb10_display), so the display scripts read the display-less kernel from the sibling directory.", "The payload rides in a boot image through U-Boot's fastboot, whose download buffer is 112 MiB; 96 MiB of payload fits, 128 MiB was refused.", "The payload step of unixnu refuses a kernel command line longer than 1000 bytes ('the kernel command line is 1018 bytes; the limit is 1000') before the board is touched. The defaults of board.toml are 884 bytes, so debugging arguments are added per run through EXTRA_KERNEL_ARGS, which replaces defaults of the same name."]
 completion = ["The payload boots on the board to the lock screen."]
-limits = ["The two-pass kernel build of this layout completed on Linux (evb10_defconfig, then evb10_display_defconfig; kernel.macho 51.7 MB, sha256 56cac3bc9d5384005ec2b2919d6ce37eb8e6a72832568b51c0f6eb784dadf210). A payload was not assembled from it and the image was last booted with the previous layout."]
-next_action = ["Boot an image built from this layout."]
+limits = ["The two-pass kernel build of this layout completes on Linux (evb10_defconfig, then evb10_display_defconfig; kernel.macho 55.0 MB, sha256 db5e4c058e6516d9cb886d2819d1ca02366a29b9748fbd6b15123e0023e5bf2f, the one booted in run v1). The payload needs a platform seed and the owner trust-cache digests, which are in no repository."]
+next_action = ["Make the user-space build reproducible, or compute the second trust_cache_sha256 entry in the payload step, so that board.toml does not change with every rebuild."]
 
 [[area.evidence]]
 kind = "source"
 reference = "patches/xnu/series"
 result = "Device patch order"
 
+[[area.evidence]]
+kind = "device"
+reference = "evidence/boot-v1-20261030.txt"
+result = "A payload assembled from this layout (96 MiB in a 106553344-byte boot image) booted through U-Boot's fastboot to a running backboardd and SpringBoard with Mali-composited frames and no panic in 235 s; kernel.macho 55017472 bytes, sha256 db5e4c05 (run v1)"
+command = "cd UniXNU-evb10 && scripts/build-evb10-kernel.sh; cd ../uefi-evb10 && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS=\"evb10-touch-demo=120 mali-timeline=1\" tools/xnu-probe/run-kernel.sh v1"
+revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"
+
 [[area]]
 id = "diagnostics"
-status = "implemented"
+status = "device-verified"
 components = []
 paths = ["patches/xnu/evb10-exit-trace.patch", "patches/xnu/evb10-thread-sample.patch", "patches/tools/evb10-thread-sample.c.inc", "patches/xnu/evb10-mmap-grant.patch", "package/Evb10Console.h"]
 inputs = ["UART2 serial console at 1.5 Mbaud; DEVELOPMENT kernel."]
@@ -248,3 +318,10 @@ next_action = ["Add a panic screen on the frame buffer."]
 kind = "source"
 reference = "patches/xnu/evb10-exit-trace.patch"
 result = "Process exit trace"
+
+[[area.evidence]]
+kind = "device"
+reference = "evidence/boot-v1-20261030.txt"
+result = "Every stage of the boot printed a time-stamped checkpoint: U-Boot hand-off 4.6 s, UEFI 4.8 s, the UniXNU menu entry 20.7 s, hand-off to the kernel 20.8 s, first kernel line 21.3 s, root accepted 24.0 s, launchd 54.9 s, backboardd on the Mali 69.4 s and SpringBoard 96.1 s (run v1)"
+command = "cd uefi-evb10 && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS=\"evb10-touch-demo=120 mali-timeline=1\" tools/xnu-probe/run-kernel.sh v1"
+revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"

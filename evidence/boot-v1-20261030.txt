@@ -1,0 +1,221 @@
+EVB10 boot evidence, run v1: the committed default arguments
+============================================================
+
+Excerpts of serial captures of the board. Lines are copied unchanged (time stamps are seconds since the capture
+started; lines longer than 200 characters are cut, NUL bytes dropped); the lines between the excerpts are left out.
+The raw captures are not stored in the repository (logs and images are ignored); each command below repeats its run.
+
+Device      Rockchip RK3588 EVB10 V10, UART2 console at 1.5 Mbaud
+Capture     2026-10-30 12:29:58, 235 s
+Command     cd uefi-evb10 && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS="evb10-touch-demo=120 mali-timeline=1" tools/xnu-probe/run-kernel.sh v1
+Firmware    uefi-evb10 94ec4bd00d4d755623ce6cedd84172cbcd238dbd (GPU rail 0.75 V), started by U-Boot's fastboot through the stub; no flash is written
+Kernel      UniXNU-evb10 833f90fb52890090ad2bdd79285cc527b00d3ead, UniXNU-rk3588-common bff921845d3e72151e6b6cda528cd80eb652b70a
+            kernel.macho (display pass) 55017472 bytes, sha256 db5e4c058e6516d9cb886d2819d1ca02366a29b9748fbd6b15123e0023e5bf2f
+Image       payload 96 MiB in a 106553344-byte boot image (U-Boot's fastboot limit is 112 MiB);
+            Metal add-on 11983536 bytes, sha256 0a355d4a4590ebe45d0c79af80acc8e49e23101a7e0a3c2c69e5a2023f61bd57
+Arguments   the defaults of board.toml plus evb10-touch-demo=120 and mali-timeline=1 (the launchd boot-args line in section 6 lists them all)
+
+1. Firmware and hand-off (areas firmware, memory, diagnostics)
+--------------------------------------------------------------
+[   4.574] Booting IMAGE kernel at 0xa000000 with fdt at 0x30000000...
+[   4.638] ## reserved-memory:
+[   4.638]   cma: addr=10000000 size=10000000
+[   4.638]   drm-logo@0: addr=ede00000 size=15a000
+[   4.638]   vendor-storage-rm@00000000: addr=ebc3e000 size=10000
+[   4.638]   ramoops@110000: addr=110000 size=e0000
+[   4.638] Adding bank: 0x00200000 - 0x08400000 (size: 0x08200000)
+[   4.638] Adding bank: 0x09400000 - 0xf0000000 (size: 0xe6c00000)
+[   4.638] Adding bank: 0x100000000 - 0x200000000 (size: 0x100000000)
+[   4.638] Adding bank: 0x2f0000000 - 0x300000000 (size: 0x10000000)
+[   4.656] Starting kernel ...
+[   4.765] PROBE: DW WDT 0xfeaf0000 armed (TORR 0xf), UniXNUBootWdtDxe takes over feeding
+[   4.801] UEFI firmware (version 0 built at 04:19:06 on Oct 30 2026)
+[  10.906] UniXNURamDisk: handoff FDT at 0x30000000, 311936 bytes
+[  10.906] UniXNURamDisk: initrd 0x50000000-0x56000000 (100663296 bytes)
+[  17.510] [Bds]Booting UniXNU
+[  20.729] UNIXNU: boot: entry 'xnu' (UniXNU EVB10)
+[  20.772] DARWINBOOT: ARM64 va=0xFFFFFFF00427C000 pa=0x5607C000 args=0x5A570000 entry=0x59
+[  20.772] 5965B8 owned=0x80000000
+[  20.772] DARWINBOOT: video base=0xE7210000 display=1 row=2560 width=640 height=480 depth=
+[  20.772] 32
+[  20.772] DARWINBOOT: command line: -v serial=3 vc_mirror=1 debug=0x10014e -enable_kprintf
+[  20.772] _spam emmc=4 offline-apfs-load=1 emmc-root-trust=1 emmc-systemos-union=1 emmc-da
+[  20.772] ta-mount=1 emmc-data-size=2048 emmc-data-persist=1 evb10-vop=2 evb10-vop-qos=0 e
+[  20.772] vb10-vop-es2=1 evb10-vop-direct=1 evb10-vop-fence=1 sheng-smp=1 armcpu-self-ipi=
+[  20.831] DARWINBOOT: inputs validated; exiting boot services
+[  20.831] ?DARWINBOOT: hand-off to the kernel
+[  20.831] 
+[  20.831] kernel   va 0xFFFFFFF00427C000  pa 0x5607C000
+[  20.831] entry    pa 0x595965B8
+[  20.831] args     pa 0x5A570000  window 0x80000000 bytes
+[  20.831] video    base 0xE7210000  640x480  row 2560 bytes  32 bpp
+[  20.831] entry words 140006B1 00000000 00000000 00000000
+[  20.831] CurrentEL 1  SCTLR_EL1 0x30D0180D  TCR_EL1 0x280803518
+[  20.831] ID_AA64MMFR0_EL1 0x101122  (PARange 2, 4 KiB granule supported)
+[  20.831] ID_AA64PFR0_EL1  0x11112222
+[  20.859] 
+[  20.859] Exiting boot services. A green bar across the top
+[  20.859] marks the loader handoff before the kernel branch.
+[  20.859] ExitBootServices: Booting Unknown OS at 0xE7ACC000
+[  21.169] XhcClearBiosOwnership: called to clear BIOS ownership
+[  21.169] XhcClearBiosOwnership: called to clear BIOS ownership
+[  21.169] XhcClearBiosOwnership: called to clear BIOS ownership
+[  21.169] UniXNUBootWdt: ExitBootServices: last kick done, the SoC resets in about 89 s unless the OS kicks 0xFEAF0000
+[  21.251] kprintf initialized
+
+2. CPU (area cpu)
+-----------------
+[  22.169] arm_cpu_init(): cpu 1 online
+[  27.186] armcpu: cpu 0 running, 2230 MHz
+[  27.186] armcpu: cpu 1 running, 2230 MHz
+[  27.186] armcpu: cpu 2 running, 2223 MHz
+[  27.186] armcpu: cpu 3 running, 2223 MHz
+
+(Section 6 lists the encoding thread's core per heavy command buffer: the column 'on A55' counts those that ran on the Cortex-A55 core.)
+
+3. Storage and root (area storage)
+----------------------------------
+[  22.257] NativeEmmc: root image at block 8459264: 2 windows, 9382658048 bytes of 58205896704
+[  22.257] NativeEmmc:   window "OS" offset 0x100000 size 6077580800 bytes (5796 MiB)
+[  22.257] NativeEmmc:   window "SystemOS" offset 0x16a600000 size 3303014400 bytes (3150 MiB)
+[  22.279] NativeEmmc: published SystemOS: lba 20333568 + 6451200 blocks (3150 MiB), read-only
+[  22.340] NativeEmmc: published Data: lba 117948352 + 4194304 blocks (2048 MiB), WRITABLE
+[  22.367] nx_mount:1617: disk2 checkpoint search: largest xid 16282, best xid 16282 @ 13
+[  23.926] NativeEmmc: SystemOS settled with 3 IOMedia below it, 111 block requests, 0 failures
+[  23.967] apfs_vfsop_mountroot:2965: apfs: mountroot called!
+[  23.971] NativeEmmc: media disk2: content , 2147483648 bytes, whole, writable uuid -
+[  23.991] NativeEmmc: root device 1,9 (disk5s1) is a read-only volume of the "OS" window: accepted without Apple's root authentication (boot-arg emmc-root-trust=1)
+[  24.315] NativeEmmc: Data volume 3E8C2B1A-5D47-4F90-A6C3-9B1D7E0F2A48 is /dev/disk3s1 (device 1,5), writable
+[  24.369] evb10: Data: /private/var is device 1,5 writable 1 apfs 1
+[  24.370] evb10: Data: persistent volume, seeded by an earlier boot (/private/var/.evb10-seeded exists): tree and preferences kept, nothing copied
+
+Transaction id of the writable Data device (disk2 in the log) at each boot of 2026-10-30, oldest first. A run
+ends by resetting the board, never by an orderly shutdown, so a boot that finds a higher id than the one before it
+is mounting what the previous runs wrote ("recovered": the container was reloaded from its newest checkpoint):
+2026-10-30 00:26:30  skf1   xid  10018  recovered after an unclean unmount
+2026-10-30 00:40:53  ycx1   xid  10150  recovered after an unclean unmount
+2026-10-30 00:48:07  ycf1   xid  10272  recovered after an unclean unmount
+2026-10-30 00:55:11  ycf2   xid  10441  recovered after an unclean unmount
+2026-10-30 01:06:21  ycx2   xid  10601  recovered after an unclean unmount
+2026-10-30 01:34:34  shd2   xid  10733  recovered after an unclean unmount
+2026-10-30 01:47:30  shd3   xid  10876  recovered after an unclean unmount
+2026-10-30 02:04:36  shd4   xid  11036  recovered after an unclean unmount
+2026-10-30 02:14:32  shd5   xid  11188  recovered after an unclean unmount
+2026-10-30 02:23:28  shd6   xid  11304  recovered after an unclean unmount
+2026-10-30 02:32:48  shot1  xid  11456  recovered after an unclean unmount
+2026-10-30 02:46:41  tl1    xid  11588  recovered after an unclean unmount
+2026-10-30 02:53:36  tl2    xid  11742  recovered after an unclean unmount
+2026-10-30 03:04:33  tr1    xid  11865  recovered after an unclean unmount
+2026-10-30 03:31:40  un1    xid  11981  recovered after an unclean unmount
+2026-10-30 03:38:04  tr2    xid  12132  recovered after an unclean unmount
+2026-10-30 03:45:23  tr3    xid  12273  recovered after an unclean unmount
+2026-10-30 04:01:10  pl1    xid  12409  recovered after an unclean unmount
+2026-10-30 04:09:25  pl2    xid  12523  recovered after an unclean unmount
+2026-10-30 04:20:43  vb1    xid  12648  recovered after an unclean unmount
+2026-10-30 04:40:15  vb2    xid  12648  -
+2026-10-30 04:45:24  fp1    xid  12648  -
+2026-10-30 04:57:28  fp2    xid  12784  recovered after an unclean unmount
+2026-10-30 05:05:37  vb3    xid  12887  recovered after an unclean unmount
+2026-10-30 05:10:38  fp3    xid  12887  -
+2026-10-30 05:16:26  vb4    xid  13012  recovered after an unclean unmount
+2026-10-30 05:32:32  cp1    xid  13012  -
+2026-10-30 05:39:05  vb5    xid  13122  recovered after an unclean unmount
+2026-10-30 05:48:29  ord1   xid  13122  -
+2026-10-30 06:16:59  ord2   xid  13122  -
+2026-10-30 06:24:23  cp2    xid  13122  -
+2026-10-30 06:32:22  cp3    xid  13249  recovered after an unclean unmount
+2026-10-30 06:44:04  fv1    xid  13476  recovered after an unclean unmount
+2026-10-30 06:48:24  fv2    xid  13600  recovered after an unclean unmount
+2026-10-30 07:04:21  fx1    xid  13717  recovered after an unclean unmount
+2026-10-30 07:42:22  pf1    xid  13828  recovered after an unclean unmount
+2026-10-30 08:34:46  pf2    xid  13936  recovered after an unclean unmount
+2026-10-30 09:08:56  af1    xid  14043  recovered after an unclean unmount
+2026-10-30 09:19:24  af2    xid  14170  recovered after an unclean unmount
+2026-10-30 09:35:15  af3    xid  14300  recovered after an unclean unmount
+2026-10-30 09:41:38  cf1    xid  14414  recovered after an unclean unmount
+2026-10-30 09:48:45  sl1    xid  14558  recovered after an unclean unmount
+2026-10-30 09:57:29  gp1    xid  14697  recovered after an unclean unmount
+2026-10-30 10:10:59  ps0    xid  14817  recovered after an unclean unmount
+2026-10-30 10:20:09  sl2    xid  14958  recovered after an unclean unmount
+2026-10-30 10:37:32  sl3    xid  15090  recovered after an unclean unmount
+2026-10-30 10:49:55  ep1    xid  15220  recovered after an unclean unmount
+2026-10-30 10:58:31  ep2    xid  15386  recovered after an unclean unmount
+2026-10-30 11:18:16  ep3    xid  15528  recovered after an unclean unmount
+2026-10-30 11:24:10  gp2    xid  15974  recovered after an unclean unmount
+2026-10-30 11:29:55  tk4    xid  16124  recovered after an unclean unmount
+2026-10-30 11:33:30  soak1  xid  16124  -
+2026-10-30 11:51:44  cb1    xid  16282  recovered after an unclean unmount
+2026-10-30 12:29:58  v1     xid  16282  -
+2026-10-30 12:38:08  v2     xid  16444  recovered after an unclean unmount
+2026-10-30 14:22:11  kit1   xid  16586  recovered after an unclean unmount
+
+4. Display (area display)
+-------------------------
+[  22.129] evb10: fb: 1072x1904 at 0x5e5b8000 (8167424 bytes, kernel 0xfffffff8f1da2000), was 640x480 at 0xe7210000
+[  22.730] evb10: vop-direct: IOMMU status 00000018 00000018 before, 00000019 00000019 after (paging on), tables at 0x7faee000, dte 7faee000 7faee000, window ede00000 vir 0000028e
+[  22.738] evb10: display late: IOSurface kext 0 found 1 video 0x5e5b8000+0x7c9400 gop map 0xfffffff289837880 1072x1904
+[  97.809] evb10: display gaps t+75s W first=115817110 from=1: 163 70 109 170 160 166 166 166 166 165 168 166 166 165 168 166 165 167 166 164
+[  97.813] evb10: display gaps t+75s S first=115823087 from=1: 165 168 165 164 170 164 165 170 164 169 165 164 170 165 164 171 165 165 18 110
+[ 228.212] evb10: display gaps t+205s S first=244979107 from=41: 167 164 170 162 171 166 163 170 164 167 166 166 167 170 166 163 166 169 163 167 166 169 166 166 166 168 166 165 167 168 165 168 165 119 [cut]
+
+v1: per gesture, finger down (0.8 s): fps, mean gap ms, gaps > 25 ms; GPU busy %, CBs, median CB gpu ms; settle: frames
+  g 0 swipe up      20.0 fps  gap  17.8 ms  slow  1   GPU   3.0%  CBs  19 med   0.8 ms   settle   1 frames
+  g 2 swipe right   25.0 fps  gap  18.4 ms  slow  1   GPU  20.8%  CBs  17 med   9.9 ms   settle  52 frames
+  g 3 swipe left    55.0 fps  gap  17.0 ms  slow  1   GPU  48.1%  CBs  38 med   9.7 ms   settle  32 frames
+  g 4 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  45.3%  CBs  37 med   9.8 ms   settle  33 frames
+  g 5 swipe left    56.2 fps  gap  17.1 ms  slow  1   GPU  50.3%  CBs  39 med   9.8 ms   settle  33 frames
+  g 6 swipe right   51.2 fps  gap  16.6 ms  slow  0   GPU  45.6%  CBs  38 med   9.8 ms   settle  34 frames
+  g 7 swipe left    50.0 fps  gap  19.2 ms  slow  6   GPU  45.4%  CBs  35 med   9.9 ms   settle  32 frames
+  g 8 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  43.6%  CBs  36 med   9.8 ms   settle  36 frames
+  g 9 swipe left    57.5 fps  gap  16.6 ms  slow  0   GPU  51.7%  CBs  41 med   9.7 ms   settle  33 frames
+  g10 swipe right   50.0 fps  gap  16.7 ms  slow  0   GPU  44.8%  CBs  37 med   9.6 ms   settle  34 frames
+  g11 swipe left    53.8 fps  gap  17.8 ms  slow  3   GPU  48.0%  CBs  36 med   9.9 ms   settle  32 frames
+  g12 swipe right   51.2 fps  gap  16.6 ms  slow  0   GPU  46.8%  CBs  39 med   9.3 ms   settle  35 frames
+  mean over 12 moving gestures: 47.5 fps while the finger is down; median CB gpu 9.8 ms
+  gestures 3-11 (9): 52.6 fps, 11 gaps > 25 ms, 57.5 fps best, median CB gpu 9.8 ms
+
+5. Input (area input)
+---------------------
+[  22.176] evb10: touch: starting
+[  22.186] evb10: touch: I2C5 version 5, clock 200000000 Hz, SCL 100 kHz, CLKDIV 007c007c
+[  22.331] evb10: touch: I2C5 scan: 2 device(s) answer: 0x14 0x5d
+[  22.331] evb10: touch: Goodix at 0x14, product id 1158 (31 31 35 38), configured 800x480, 10 contacts
+[  22.331] evb10: touch: Goodix at 0x14, axes 720x1280 -> 1080x1920, swap 0 flipx 0 flipy 0
+[  33.833] evb10: touch: tick 536 us on average, 546 us at most (1000 ticks)
+[ 171.888] evb10: touch: t+130s frames 352 with contact 347 errors 0 last raw (605,640) status reads 0 last 0x00 INT 0, HID reports 352
+
+(evb10-touch-demo=120 plays scripted swipes from t+120 s, so the contacts counted at t+130 s come from the demo, not from a finger.)
+
+6. GPU and userland (area gpu, packaging)
+-----------------------------------------
+[  22.195] mali: clocks now:    sel158 0x1f21 gate66 0x4 (cpll / 2 = 750000 kHz)
+[  22.245] mali: clock probe: 15755981 GPU cycles in 21007 us = 750 MHz (timestamp register 03a329933)
+[  22.706] mali: service "MaliService" registered: userland can open it (IOServiceGetMatchingService); sandbox grant: gpu-test,backboardd,SpringBoard,PosterBoard,WidgetRenderer_D,AegirPoster,Kaleidosc [cut]
+(The next line is one line in the log, wrapped here; 'skip attaching fsw to lo0 using legacy TX model' inside it is
+ another kernel message that the serial console interleaved.)
+[  54.932] com.apple.xpc.launchd|1969-12-31 16:01:13.415172 <Notice>: boot-args = -v serial=3 vc_mirror=1 debug=0x10014e
+           -enable_kprintf_spam emmc=4 offline-apfs-load=1 emmc-root-trust=1 emmc-systemos-union=1 emmc-data-mount=1
+           emmc-data-size=2048 emmc-data-persist=1 evb10-vop=2 evb10-vop-qos=0 evb10-vop-es2=1 evb10-vop-direct=1
+           evb10-vop-fence=1 sheng-smp=1 armcpu-self-ipi=1 armcpu-mmio-sgi=0 cpumask=31 sched-slowcpus=240 wdt-kick=1800
+           offline-mobile-graphics-load=1 offline-legacy-regisskip attaching fsw to lo0 using legacy TX modelter=1
+           offline-legacy-phase=4 offline-legacy-gop=1 evb10-fb-w=1072 evb10-fb-h=1904 offline-legacy-unit-scale=2
+           offline-legacy-pm=1 offline-legacy-validate=1 offline-legacy-transfer=1 offline-legacy-cpu-present=1
+           offline-key-events=1 sheng-aks=1 sheng-vsync=60 evb10-hid=1 evb10-touch=1 mali=8 mali-metal=1 mali-pll=1 mali-div=1
+           mali-ycbcr-filter=device mali-aflush=1 mali-epri=50 evb10-gpu-addon=1 evb10-touch-xmax=720 evb10-touch-ymax=1280
+           evb10-hid-input=1 sheng-touch-hid=1 evb10-touch-demo=120 mali-timeline=1
+[  69.405] mali: connection opened by backboardd
+[  69.406] mali: user: metal: plugin in backboardd (pid 57), accelerator port 0x8707
+[  79.713] mali: user: status: vkpipe n=26 failed=0 total=54ms max=6ms, messages info 0 warning 22, cache hit 26 miss 0
+[  96.055] mali: connection opened by SpringBoard
+[ 230.090] mali: user: status: vkpipe n=76 failed=0 total=109ms max=6ms, messages info 0 warning 79, cache hit 76 miss 0
+
+run        CBs ctc p50     p90     p99  >19.3ms rep p50  rep p90    on A55  gpu50  sub50
+v1         504    14.9    18.9    22.7     8.7%     4.0      5.2     6/504    10.1    0.8
+
+v1: touch -> first command buffer: left median   62 ms [78, 61, 53, 63, 55, 145] | right median  153 ms [161, 153, 168, 148, 145]
+    touch -> first animated frame: left median  113 ms [113, 153, 303, 87, 87] | right median  184 ms [192, 175, 198, 184, 172]
+
+7. Hand check (areas display, input)
+------------------------------------
+The board's owner looked at the panel and touched the screen on the system built from the revisions above and found
+both normal (reported 2026-10-30). This is a person's observation, not a log line.
