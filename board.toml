@@ -40,6 +40,7 @@ archives = [
   "build-evb10-drivers.py Rk3588Emmc",
   "bind-emmc-storage.py",
   "build-evb10-drivers.py Evb10Touch",
+  "build-wifi-firmware.py",
   "build-evb10-drivers.py Evb10Wifi",
   "build-mali-firmware.py",
   "build-evb10-drivers.py Mali",
