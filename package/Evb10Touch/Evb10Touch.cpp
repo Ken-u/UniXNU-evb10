@@ -536,6 +536,67 @@ void init() {
   gInitDone = true;
 }
 
+// evb10-touch-script=SECS: taps and swipes from a script that is compiled in, for looking at screens that need a finger (Settings, the keyboard) with
+// the screenshots of evb10-shot-img. The script is package/Evb10Touch/touch_script.inc, which is not in the repository (git-ignored); without it
+// the argument does nothing. It defines kScript[], one entry per contact: when it starts (ms after SECS seconds from the first poll), where, for how
+// long it stays down and how far it moves meanwhile; positions are permille of the controller's range:
+//   static const ScriptStep kScript[] = { {t_ms, x, y, hold_ms, dx, dy}, ... };
+// Returns 1 while a contact is down (c is where), 0 once when it lifts, -1 when it is not the script's turn.
+struct ScriptStep {
+  uint32_t t_ms;
+  uint16_t x, y, hold_ms;
+  int16_t dx, dy;
+};
+#if __has_include("touch_script.inc")
+#include "touch_script.inc"
+#define EVB10_TOUCH_SCRIPT 1
+#endif
+int scriptPoll(Contact *c) {
+#ifdef EVB10_TOUCH_SCRIPT
+  static unsigned start = ~0u;
+  static uint64_t began;
+  static bool down;
+  static unsigned announced = ~0u;
+  if (start == ~0u) {
+    start = 0;
+    PE_parse_boot_argn("evb10-touch-script", &start, sizeof start);
+    began = nowUs();
+  }
+  if (!start) return -1;
+  const int64_t t = static_cast<int64_t>((nowUs() - began) / 1000) - static_cast<int64_t>(start) * 1000;
+  if (t >= 0) {
+    for (unsigned i = 0; i < sizeof kScript / sizeof kScript[0]; ++i) {
+      const ScriptStep &step = kScript[i];
+      if (t < step.t_ms || t >= static_cast<int64_t>(step.t_ms) + step.hold_ms + 60) continue;
+      const int64_t into = t - step.t_ms;
+      const int64_t moved = into < step.hold_ms ? into : step.hold_ms;
+      const int h = step.hold_ms ? static_cast<int>(moved) : 0;
+      // A finger that does not move still changes the last bit of its position at every poll, as a real one does; a contact that only lands and
+      // lifts again is not what the stack is used to.
+      const int still = (step.dx == 0 && step.dy == 0) ? 1 : 0;
+      const int x = (step.x + (step.hold_ms ? step.dx * h / step.hold_ms : 0)) * static_cast<int>(gXMax) / 1000 + (still ? static_cast<int>((t / 10) & 1) : 0);
+      const int y = (step.y + (step.hold_ms ? step.dy * h / step.hold_ms : 0)) * static_cast<int>(gYMax) / 1000 + (still ? static_cast<int>((t / 10 / 2) & 1) : 0);
+      if (announced != i) {
+        announced = i;
+        printf("evb10: touch: script step %u at (%d,%d) of (%u,%u)\n", i, x, y, gXMax, gYMax);
+      }
+      down = true;
+      c->id = 0;
+      c->x = x;
+      c->y = y;
+      return 1;
+    }
+  }
+  if (down) {
+    down = false;
+    return 0;
+  }
+#else
+  (void)c;
+#endif
+  return -1;
+}
+
 // evb10-touch-demo=SECS: scripted gestures, no finger needed, for measuring the frame rate of real animations. From SECS seconds after the first poll, every
 // 7 s: a swipe up from the bottom edge (unlock, close an app), then alternately a swipe to the left and to the right across the middle (pages of the home
 // screen, the camera and widgets screens of the lock screen), each 0.8 s long, one contact, in the controller's raw units like a real finger.
@@ -597,7 +658,8 @@ void tick(thread_call_param_t, thread_call_param_t) {
   int n = gKind == kGoodix ? gtPoll(contacts) : cstPoll(contacts);
   {
     Contact scripted;
-    const int d = demoPoll(&scripted);
+    int d = scriptPoll(&scripted);
+    if (d < 0) d = demoPoll(&scripted);
     if (d >= 0) {
       n = d;
       if (d) contacts[0] = scripted;

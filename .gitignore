@@ -36,3 +36,4 @@ __pycache__/
 
 # Generated from the vendor Wi-Fi firmware by scripts/build-wifi-firmware.py
 /package/Evb10Wifi/wifi_fw.inc
+/package/Evb10Touch/touch_script.inc
