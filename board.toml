@@ -40,6 +40,7 @@ archives = [
   "build-evb10-drivers.py Rk3588Emmc",
   "bind-emmc-storage.py",
   "build-evb10-drivers.py Evb10Touch",
+  "build-evb10-drivers.py Evb10Wifi",
   "build-mali-firmware.py",
   "build-evb10-drivers.py Mali",
   # Only configs/evb10_display_defconfig links this archive; under evb10_defconfig the step does nothing.

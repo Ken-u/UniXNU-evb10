@@ -7,6 +7,7 @@ board.toml. This script builds what the catalog does not carry:
     build/rk3588-emmc/libRk3588Emmc.a      package/Rk3588Emmc  (submodule; bind-emmc-storage.py makes the archive)
     build/mali/libMali.a                   package/Mali        (submodule)
     build/evb10-touch/libEvb10Touch.a      package/Evb10Touch
+    build/evb10-wifi/libEvb10Wifi.a        package/Evb10Wifi
     build/evb10-hid/                       package/Evb10Hid    (object; build-evb10-hid.py)
     build/native-legacy-display/           package/Evb10Display (object; build-native-legacy-display.py)
 
@@ -16,7 +17,7 @@ build records the exact command for every object it compiles in a `.cpo.json` fi
 that record, points it at the driver source, and runs the compiler. The board's package/ appears as kits/evb10 in the build
 tree; catalog drivers are under drivers/.
 
-  python3 scripts/build-evb10-drivers.py Rk3588Emmc | Mali | Evb10Touch
+  python3 scripts/build-evb10-drivers.py Rk3588Emmc | Mali | Evb10Touch | Evb10Wifi
   python3 scripts/build-evb10-drivers.py NativeLegacyDisplay | NativeGOPPresenter | NativeKeyStoreEvents | NativeHidInput
 
 Derived from UniXNU-sheng's scripts/build-arm-driver.py, BSD-2-Clause-Patent,
@@ -44,6 +45,9 @@ COMPONENTS = {
     # The touch panel of the DSI display (I2C5, polled). A plain archive; the display probe (package/LegacyDisplayProbe.cpp)
     # starts it with evb10-touch=1. It publishes the finger set NativeHidInput consumes.
     'Evb10Touch': (('kits/evb10/Evb10Touch/Evb10Touch.cpp',), 'evb10-touch', (), False),
+    # The Wi-Fi module (Ampak AP6398S) on the SDIO host: powers it and reads its identity, polled (docs/network.md). A plain archive,
+    # linked by the display kernel only; the display probe starts it with evb10-wifi=1.
+    'Evb10Wifi': (('kits/evb10/Evb10Wifi/Evb10Wifi.cpp',), 'evb10-wifi', (), False),
     # The Mali-G610: power, firmware, MMU, command streams and the Metal-facing service; started by the display probe
     # with mali=<milestone>.
     'Mali': (('kits/evb10/Mali/Mali.cpp',), 'mali', (), False),
