@@ -56,12 +56,13 @@ stored in any repository. Firmware, boot flow and the serial and reset tooling a
 The format 2 configuration materialises, resolves and passes the porting-record check. The full
 XNU series (ARM64, SoC, OS and device patches) applies to a fresh XNU clone, and
 `scripts/build-evb10-kernel.sh` builds both kernel passes on Linux (kernel sha256
-`56cac3bc9d5384005ec2b2919d6ce37eb8e6a72832568b51c0f6eb784dadf210`). The results recorded in
-`porting.toml` were first observed with an earlier repository layout. On 2026-10-29 every piece was rebuilt
-from the pushed repositories in an empty directory ([`docs/reproduce.md`](docs/reproduce.md)) and booted: eMMC root and
-Data, eight cores, `launchd` with about 110 processes, SpringBoard and backboardd, Mali-composited frames
-(`vkpipe failed=0`) and no panic over a 130 s capture. The panel image and touch were not looked at in that run, so the
-areas stay `implemented` rather than `device-verified`.
+`db5e4c058e6516d9cb886d2819d1ca02366a29b9748fbd6b15123e0023e5bf2f`). The results recorded in
+`porting.toml` were first observed with an earlier repository layout. Since then every piece has been rebuilt
+from the pushed repositories in an empty directory ([`docs/reproduce.md`](docs/reproduce.md)) and booted on the board
+(2026-10-29 and 2026-10-30): eMMC root and Data, eight cores (five with the frame-rate defaults), `launchd` with about
+110 processes, SpringBoard and backboardd, Mali-composited frames (`vkpipe failed=0`) and no panic over captures of 130 to
+235 s. The panel and the touch screen were checked by hand on that system and work normally. All areas in scope are
+therefore `device-verified`; the excerpts of the serial captures behind each entry are in [`evidence/`](evidence/).
 
 Scrolling the home screen gets about 50 frames per second in the steady state with the default `kernel_args`, which carry
 the frame-rate group: zero-copy scanout with the GPU fence, the GPU at 750 MHz, the device's YCbCr filter, and the render
@@ -69,5 +70,5 @@ server's encoding thread kept off the Cortex-A55 cores (52.6 frames per second o
 default boot, 57.5 at best; MaliMetal's `docs/notes.zh-CN.md`, "帧率" and "帧率（二）"). At 750 MHz 8.7 % of the heavy command
 buffers miss their 19.3 ms deadline; a 1 GHz GPU (firmware built with `GPU_RAIL_UV=850000` plus `mali-npll=1000`, see
 [`docs/reproduce.md`](docs/reproduce.md)) brings that to 1.6 to 2.5 %. Open items: a right swipe starts about 100 ms after
-a left one (cause not proven), fixed GPU and CPU clocks, interrupt-driven GPU completion, a person's look at the panel at this
-frame rate and a finger on the touch controller at 400 kHz, network, audio and power management.
+a left one (cause not proven), fixed GPU and CPU clocks, interrupt-driven GPU completion, a finger on the touch controller at
+400 kHz (the default 100 kHz was checked by hand), network, audio and power management.
