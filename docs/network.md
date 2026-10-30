@@ -1,7 +1,8 @@
 # Wi-Fi (AP6398S) on the EVB10
 
-Status: **planned**. The module is powered and identified over SDIO from U-Boot; no kernel driver, firmware download or
-Apple80211 glue exists yet. This page keeps what is known, what was observed on the board, and what comes next.
+Status: **planned**. The module is powered and identified over SDIO, from U-Boot and from the kernel; there is no firmware
+download, network interface or Apple80211 glue yet. This page keeps what is known, what was observed on the board, and what
+comes next.
 
 ## Hardware
 
@@ -33,6 +34,20 @@ Observed on the board (log excerpt: `evidence/wifi-sdio-id-20261030.txt`):
   ChipCommon (0x18000000) reads `CHIPID` = `0x17294359`: chip `0x4359`, revision 9, which is the C0 stepping;
 * all of it at 400 kHz, 1-bit, from the 24 MHz oscillator.
 
+## Checkpoint 2: the kernel reads the same identity (done)
+
+`package/Evb10Wifi/Evb10Wifi.cpp` is the probe above as kernel code. The display probe starts it from a thread call when the
+boot argument `evb10-wifi=1` is given (not in the defaults of `board.toml`: add it per run, for example
+`EXTRA_KERNEL_ARGS="evb10-wifi=1"` with `run-kernel.sh`). It maps the host, GPIO0, GPIO2, BUS_IOC and the CRU, opens the SDIO
+gates, sets the pins, power-cycles WL_REG_ON (100 ms low, 300 ms high), runs the polled DW-MSHC at 400 kHz in 1-bit mode and does
+CMD0, CMD5, CMD3, CMD7 and the CMD52 reads of CCCR, CIS and ChipCommon. Its archive (`libEvb10Wifi.a`) is linked by the display
+kernel only, because the display probe is its only caller.
+
+Observed on the board (`evidence/wifi-kernel-id-20261030.txt`): the same answers as from U-Boot (OCR `ffff00`, 3 IO functions,
+RCA 1, `MANFID 02d0:4359`, `CHIPID 17294359`, `CHIPCLKCSR 48`), 0.43 s after the driver starts, and the system runs on to
+SpringBoard as before. At kernel entry `CLKSEL_CON(172)` reads `0x0c` (GPLL, divider 3) and both SDIO gates and resets are open, so
+the driver sets the mux to the 24 MHz oscillator itself.
+
 ## Findings from the bring-up
 
 * **The IOMUX registers are in BUS_IOC, not in the tables `pinctrl-rockchip.c` shows first.** For GPIO2_A4..B7 the function
@@ -61,9 +76,10 @@ Recorded as optional entries in `proprietary-files.txt` (section "AP6398S Wi-Fi"
 
 ## What is missing
 
-1. **An SDIO host for the kernel.** DW-MSHC in SDIO mode with the register sequence above, interrupt SPI 204 (a fixed number:
-   the node must not export `interrupts`), then 4-bit and a higher clock. The eMMC host (`dwcmshc`, `Rk3588Emmc`) is a different
-   controller.
+1. **A real SDIO host.** `Evb10Wifi` only does CMD52 at 400 kHz, 1-bit. Still to come: 4-bit and a higher clock (the CRU divider
+   and the host's CLKDIV, the drive and sample phases in `SDIO_CON0/1` at 0xfd7c0c24/28), CMD53 with block transfers (FIFO or
+   the host's internal DMA), and the interrupt (SPI 204, a fixed number: the node must not export `interrupts`). The eMMC host
+   (`dwcmshc`, `Rk3588Emmc`) is a different controller.
 2. **A Broadcom FullMAC component.** The catalog only has `Ath12kWifi` (Qualcomm, PCIe). The station interface of its
    `nw_abi.h` (`nw_wifi_scan/connect/tx/...`, `nw_wifi_events`) can stay; the board interface changes from PCIe BAR and MSI to
    SDIO function accesses. The reference for the protocol is Linux `brcmfmac` (`sdio.c`, `bcmsdh.c`, `chip.c`): backplane
@@ -74,5 +90,5 @@ Recorded as optional entries in `proprietary-files.txt` (section "AP6398S Wi-Fi"
 
 ## Next step
 
-Make the in-kernel SDIO host bring the card to the same point as the probe (identity read through the driver on the board),
-then download the firmware.
+Give the in-kernel host CMD53 and 4-bit, then download `fw_bcm4359c0_ag.bin` and the nvram to the chip and see it boot (the
+firmware's console and `CHIPID` through the backplane are the checks).
