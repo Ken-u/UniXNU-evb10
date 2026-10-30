@@ -61,7 +61,7 @@ enum {
   kSsid = 1, kAuthType = 2, kCipherKey = 3, kChannel = 4, kPowerSave = 5, kTxPower = 7, kRate = 8, kBssid = 9, kScanReq = 10, kScanResult = 11,
   kCardCaps = 12, kState = 13, kPhyMode = 14, kOpMode = 15, kRssi = 16, kNoise = 17, kPower = 19, kAssociate = 20, kAssociateResult = 21,
   kDisassociate = 22, kSupportedChannels = 27, kLocale = 28, kDeauth = 29, kDriverVersion = 43, kHardwareVersion = 44, kCountryCode = 51,
-  kRadioInfo = 54, kScanReqMultiple = 86, kScanCacheClear = 90, kCurrentNetwork = 103, kChannelsInfo = 207, kHwSupportedChannels = 254,
+  kRadioInfo = 54, kScanReqMultiple = 86, kScanCacheClear = 90, kCurrentNetwork = 103, kChannelsInfo = 207, kHwSupportedChannels = 254, kProperty = 383, kFlagA = 470, kFlagB = 471,
 };
 // events
 enum { kEvPowerChanged = 1, kEvSsidChanged = 2, kEvBssidChanged = 3, kEvLinkChanged = 4, kEvAssocDone = 9, kEvScanDone = 10 };
@@ -321,6 +321,17 @@ int apple80211(bool set, apple80211req &rq) {
       return r ? EINVAL : 0; }
     case kDisassociate: case kDeauth: log(6, "wifi-net: leave"); nw_wifi_disconnect(); post_link(false); return 0;
     case kScanCacheClear: case kLocale: case kCountryCode: case kPowerSave: case kAuthType: case kCipherKey: return 0;
+    // Settings the module has no use for, that the wireless daemon sends at every state change (a property list, two flags): taking them without
+    // effect is what a driver with nothing to configure does; refusing makes the daemon repeat them and log errors.
+    case kProperty: {
+      static int seen; uint8_t buf[320];
+      if (seen < 3 && rq.req_data && ++seen) {
+        memset(buf, 0, sizeof buf); if (copyin(rq.req_data, buf, rq.req_len < sizeof buf - 1 ? rq.req_len : sizeof buf - 1)) return 0;
+        for (unsigned i = 0; i < sizeof buf; i++) if (buf[i] < 32 || buf[i] > 126) buf[i] = '.';
+        buf[sizeof buf - 1] = 0;
+        log(6, "wifi-net: property list %.150s", reinterpret_cast<char *>(buf + 8)); log(6, "wifi-net: property list ...%.150s", reinterpret_cast<char *>(buf + 158)); }
+      return 0; }
+    case kFlagA: case kFlagB: return 0;
     default: return EOPNOTSUPP;
     }
   }
@@ -362,7 +373,11 @@ int apple80211(bool set, apple80211req &rq) {
     if (st.state < NW_STA_ASSOC) return ENOENT;
     nw_bss_info b; const int count = nw_wifi_bss_count();
     for (int i = 0; i < count; i++) if (!nw_wifi_bss_get(i, &b) && !memcmp(b.bssid, st.bssid, 6)) { fill_result(out.res, b); return copy_out(rq, &out.res, sizeof out.res); }
-    return ENOENT; }
+    // Joined by a join that did not scan first (the file's network at boot): the access point is not in the list, so describe it from the
+    // link's own state. Answering "no such network" while associated makes the wireless daemon think the link is gone.
+    memset(&b, 0, sizeof b); memcpy(b.bssid, st.bssid, 6); b.ssid_len = st.ssid_len; memcpy(b.ssid, st.ssid, 32); b.freq_mhz = st.freq_mhz; b.signal_dbm = st.signal_dbm;
+    b.caps = static_cast<uint16_t>(0x0001 | (gKeyed ? 0x0010 : 0)); b.beacon_int = 100;
+    fill_result(out.res, b); return copy_out(rq, &out.res, sizeof out.res); }
   default: return EOPNOTSUPP;
   }
 }
@@ -377,6 +392,12 @@ errno_t if_ioctl(ifnet_t, unsigned long cmd, void *data) {
     static unsigned shown; const int type = rq->req_type; const bool first = type >= 0 && type < 256 && !(gLogged[type / 32] & (1u << (type % 32)));
     if (type >= 0 && type < 256) gLogged[type / 32] |= 1u << (type % 32);
     if (shown < 300 || first) { ++shown; log(6, "wifi-net: request %u: type %d %s len %u val %d -> %d (len %u val %d)", shown, type, cmd == SIOCSA80211 ? "set" : "get", len, val, e, rq->req_len, rq->req_val); }
+    // what a refused set carries, to see what the framework wants: the first bytes of the first two of each type
+    if (e == EOPNOTSUPP && cmd == SIOCSA80211 && type >= 0 && type < 512 && rq->req_data && len) {
+      static uint8_t dumped[512]; if (dumped[type] < 2) { dumped[type]++; uint8_t head[40]; memset(head, 0, sizeof head);
+        if (!copyin(rq->req_data, head, len < sizeof head ? len : sizeof head)) {
+          char text[100]; int n = 0; for (unsigned i = 0; i < sizeof head && n < 90; i++) n += snprintf(text + n, sizeof text - n, "%02x", head[i]);
+          log(6, "wifi-net: refused set %d starts %s", type, text); } } }
     return e;
   }
   case SIOCGIFMEDIA: {

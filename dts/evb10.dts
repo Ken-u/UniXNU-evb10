@@ -19,3 +19,16 @@
 // not exported to the Apple device tree.
 &uart2 { status = "okay"; };
 &emmc { status = "okay"; };
+
+// The Wi-Fi module (an Ampak AP6398S on the SDIO host at 0xfe2d0000; package/Evb10Wifi addresses it by its fixed physical base, so the node has no
+// registers and no interrupts). The node only has to exist in the Apple device tree: the userland's wifid is a launchd job limited to devices that
+// have a node named "wlan" (_LimitLoadToDeviceTree), and without wifid the Settings Wi-Fi pane has nothing to talk to (docs/network.md).
+/ {
+	soc {
+		wlan {
+			compatible = "brcm,bcm4329-fmac";
+			device_type = "wlan";
+			unixnu,adt-name = "wlan";
+		};
+	};
+};
