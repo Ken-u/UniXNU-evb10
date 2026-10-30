@@ -2,4 +2,4 @@
 kind = "soc"
 name = "rk3588"
 git = "https://github.com/Ken-u/UniXNU-rk3588-common.git"
-commit = "a1b065119ed3fc8745faeefae1e4c7ba0773d94d"
+commit = "bff921845d3e72151e6b6cda528cd80eb652b70a"
