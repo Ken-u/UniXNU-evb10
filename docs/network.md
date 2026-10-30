@@ -127,6 +127,35 @@ throughout. The packets are the userland's; the kernel only carries them. Nobody
 (`mobileassetd`, `nsurlsessiond`) and the 2 GiB Data window (about 250 MB free after a normal boot) can fill up within a few minutes,
 after which those daemons see `ENOSPC`; the next boot had its free space back. Nothing else is affected, which is why Wi-Fi stays opt-in.
 
+## Checkpoint 7: the Settings Wi-Fi pane (the daemon is attached; the pane itself was not seen)
+
+The pane talks to `wifid`, not to the driver, and `wifid` is a launchd job (`com.apple.wifid.plist` in the root image) with
+`_LimitLoadToDeviceTree = ["wlan", "marconi-wifi"]`: it starts only on a device whose Apple device tree has a node named `wlan`. The EVB10's
+tree had none, so the daemon was never launched and nothing in the OS asked `en0` anything (run `set2`: no `wifid` process). `dts/evb10.dts` now
+has a `wlan` node (`unixnu,adt-name`, no registers, no interrupts: the driver addresses the module by its fixed physical base). The node is in
+every boot; without `evb10-wifi=N` the daemon finds no `en0`.
+
+Observed on the board (`evidence/wifi-settings-20261031.txt`, runs `set5` and `set9`, `evb10-wifi=5`, no panic): `wifid` is in the process table
+from about 75 s and sends Apple80211 requests to `en0` (state, SSID, BSSID, card capabilities, current network, supported channels, country,
+radio info, a property list per state change). What `WifiNet.cpp` changed because of them:
+
+* **Current network (103)** answered `ENOENT` 132 times while the link was up, because the join at boot never scanned and the associated
+  access point was not in the BSS list; it is now described from the link's own state (SSID, BSSID, channel, RSSI).
+* **Type 383 (4104 bytes), 470 and 471 (one byte)** are sets, sent at every state change: 383 carries a property list of the interface
+  (`IO80211InterfaceIPConfigurationBusy`, `IO80211InterfaceIPV4Params`, `IO80211InterfaceWifidEnumeratedInfra`). They are accepted and ignored;
+  refusing them made the daemon repeat them (34 times in 200 s). The log prints the first three lists.
+* Still refused (`EOPNOTSUPP`, the daemon copes): 6, 18, 25, 57, 96, 97, 106, 207 (the channels-info structure, 10016 bytes, format not known),
+  387, 419, 423, 473.
+
+**Not seen yet:** the pane itself. No scan request (10 or 86) and no association request (20) has arrived, because nothing opened Settings.
+`evb10-touch-script=SECS` (`Evb10Touch.cpp`) plays swipes and taps from `package/Evb10Touch/touch_script.inc` (git-ignored, compiled in) so
+that a run can open Settings without a person; with `evb10-ps=12 evb10-shot-img=1 evb10-shot-scale=2` the serial log carries a screenshot
+every 28 s. What it showed: the lock screen needs two swipes up (the first one is always lost, whatever the gap), and then the home screen is
+there; **taps on the Settings icon (Dock and home page, held for 20 to 900 ms, with and without jitter) did not open it, and no `Preferences`
+process appeared.** Whether the tap does not reach SpringBoard or the app does not start was not separated (a long press, which opens a
+context menu without launching anything, would tell). A person has to open Settings and the Wi-Fi pane once on the board while the log runs
+(`CAPTURE_SECS=600`) to finish this checkpoint.
+
 ## Findings from the bring-up
 
 * **The IOMUX registers are in BUS_IOC, not in the tables `pinctrl-rockchip.c` shows first.** For GPIO2_A4..B7 the function
@@ -195,9 +224,10 @@ kernel image by `scripts/build-wifi-firmware.py`. Without it levels 4 and 5 star
    the radio is the limit was not separated. Still to come: the sample and drive phases in `SDIO_CON0/1` (0xfd7c0c24/28) and 50 MHz or more, the
    host's internal DMA for the frames, and the interrupt (SPI 204, a fixed number: the node must not export `interrupts`; function 1's
    in-band interrupt) instead of the polling worker. The eMMC host (`dwcmshc`, `Rk3588Emmc`) is a different controller.
-2. **Settings.** Nobody has looked at the Wi-Fi pane or joined from it on the board; the checks are the log and the traffic. The join at boot
-   is the file's network. The association request of the userland (`kAssociate`, with a passphrase or a derived key) is passed to
-   `nw_wifi_connect`, but that path was not exercised.
+2. **Settings.** `wifid` runs and is answered (checkpoint 7), but the Wi-Fi pane was not opened on the board: the scan list, the join with a
+   password (`kAssociate`, with a passphrase or a derived key, passed to `nw_wifi_connect`) and the disconnect are untested. The join at
+   boot is still the file's network, and the OS cannot store a network of its own (no keychain), so a network joined from the pane is not
+   remembered across boots.
 3. **Roaming, power save and wake.** One roam event (`event 19`) was seen and the link stayed up; `WL_HOST_WAKE` (GPIO0_B2) and power save
    (`mpc` is 0, the radio stays on) are not used. 5 GHz joins were not tried (the test network was on 2.4 GHz).
 4. **Background traffic fills the Data window** within minutes of having a network (see the side effects of checkpoint 6). A device with
@@ -207,4 +237,4 @@ kernel image by `scripts/build-wifi-firmware.py`. Without it levels 4 and 5 star
 ## Next step
 
 Make the data path fast: the interrupt and the DMA of the host, 50 MHz, and the transmit worker blocked on events instead of polling. After
-that, the join from the userland (Settings) with credentials, and 5 GHz.
+that, 5 GHz. Before that, once: open Settings, Wi-Fi on the board with the log running and read the scan and association requests.

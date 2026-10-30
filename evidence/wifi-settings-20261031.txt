@@ -1,0 +1,63 @@
+# evb10 Wi-Fi and Settings: wifid starts and what it asks the driver (run set5), and what scripted touches did (run set9). 2026-10-30, evb10-wifi=5
+# Observed on the board over the serial line; the lines are copied unchanged (the screenshots, rebuilt by shot2png.py, are described in words below).
+# Nobody looked at the screen or at Settings.
+
+## wifid is running (ps lines) and sends Apple80211 requests to en0 (the first 40 of the run; ->102 is EOPNOTSUPP)
+[  74.997] evb10: ps  44   1 R   1    0.005    0.122 msg 29/16 sys 154/149 csw 655 flt 609 wifid
+[ 101.290] evb10: ps  44   1 R  10    0.265    0.921 msg 1914/1065 sys 3193/10372 csw 7588 flt 4013 wifid
+[  74.484] evb10: wifi-net: request 1: type 12 get len 16 val 0 -> 0 (len 12 val 0)
+[  74.484] evb10: wifi-net: request 2: type 1 get len 32 val 0 -> 0 (len 11 val 0)
+[  74.484] evb10: wifi-net: request 3: type 9 get len 6 val 0 -> 0 (len 6 val 0)
+[  74.484] evb10: wifi-net: request 4: type 2 get len 16 val 0 -> 0 (len 16 val 0)
+[  74.517] evb10: wifi-net: request 5: type 387 get len 37 val 0 -> 102 (len 37 val 0)
+[  90.872] evb10: wifi-net: request 6: type 12 get len 16 val 0 -> 0 (len 12 val 0)
+[  90.872] evb10: wifi-net: request 7: type 96 get len 0 val 0 -> 102 (len 0 val 0)
+[  90.872] evb10: wifi-net: request 8: type 97 get len 16 val 0 -> 102 (len 16 val 0)
+[  90.907] evb10: wifi-net: request 9: type 1 get len 32 val 0 -> 0 (len 11 val 0)
+[  91.330] evb10: wifi-net: request 10: type 12 get len 16 val 0 -> 0 (len 12 val 0)
+[  91.330] evb10: wifi-net: request 11: type 1 get len 32 val 0 -> 0 (len 11 val 0)
+[  91.330] evb10: wifi-net: request 12: type 9 get len 6 val 0 -> 0 (len 6 val 0)
+[  91.330] evb10: wifi-net: request 13: type 2 get len 16 val 0 -> 0 (len 16 val 0)
+[  91.330] evb10: wifi-net: request 14: type 387 get len 37 val 0 -> 102 (len 37 val 0)
+[  93.473] evb10: wifi-net: request 15: type 19 get len 24 val 0 -> 0 (len 24 val 0)
+[  93.473] evb10: wifi-net: request 15: type 19 get len 24 val 0 -> 0 (len 24 val 0)
+[  94.882] evb10: wifi-net: request 16: type 12 get len 16 val 0 -> 0 (len 12 val 0)
+[  94.882] evb10: wifi-net: request 17: type 19 get len 24 val 0 -> 0 (len 24 val 0)
+[  94.882] evb10: wifi-net: request 18: type 106 get len 16 val 0 -> 102 (len 16 val 0)
+[  94.882] evb10: wifi-net: request 19: type 12 get len 16 val 0 -> 0 (len 12 val 0)
+[  94.882] evb10: wifi-net: request 20: type 254 get len 4824 val 0 -> 0 (len 4824 val 0)
+[  94.882] evb10: wifi-net: request 21: type 207 get len 10016 val 0 -> 102 (len 10016 val 0)
+[  94.882] evb10: wifi-net: request 22: type 19 get len 24 val 0 -> 0 (len 24 val 0)
+[  94.899] evb10: wifi-net: request 23: type 103 get len 1228 val 0 -> 0 (len 1228 val 0)
+[  94.925] evb10: wifi-net: request 24: type 103 get len 1228 val 0 -> 0 (len 1228 val 0)
+[  94.925] evb10: wifi-net: request 25: type 103 get len 1228 val 0 -> 0 (len 1228 val 0)
+[  94.941] evb10: wifi-net: request 26: type 470 set len 1 val 0 -> 0 (len 1 val 0)
+[  94.946] evb10: wifi-net: request 27: type 383 set len 4104 val 0 -> 0 (len 4104 val 0)
+[  94.946] evb10: wifi-net: request 28: type 19 get len 24 val 0 -> 0 (len 24 val 0)
+[  94.950] evb10: wifi-net: request 29: type 18 get len 0 val 0 -> 102 (len 0 val 0)
+[  94.950] evb10: wifi-net: request 30: type 5 get len 0 val 0 -> 0 (len 0 val 0)
+[  94.950] evb10: wifi-net: request 31: type 13 get len 8 val 0 -> 0 (len 8 val 0)
+[  94.950] evb10: wifi-net: request 32: type 14 get len 12 val 0 -> 0 (len 12 val 0)
+[  94.950] evb10: wifi-net: request 33: type 15 get len 0 val 0 -> 0 (len 0 val 1)
+[  94.950] evb10: wifi-net: request 34: type 8 get len 0 val 0 -> 0 (len 0 val 54)
+[  94.950] evb10: wifi-net: request 35: type 57 get len 0 val 0 -> 102 (len 0 val 0)
+[  94.954] evb10: wifi-net: request 36: type 16 get len 52 val 0 -> 0 (len 52 val 0)
+[  94.954] evb10: wifi-net: request 37: type 17 get len 52 val 0 -> 0 (len 52 val 0)
+[  94.954] evb10: wifi-net: request 38: type 4 get len 16 val 0 -> 0 (len 16 val 0)
+[  94.954] evb10: wifi-net: request 39: type 2 get len 16 val 0 -> 0 (len 16 val 0)
+
+## the property lists wifid sets on the interface (type 383), now accepted
+[  94.946] evb10: wifi-net: property list <?xml version="1.0" encoding="UTF-8"?>.<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0
+[  94.946] evb10: wifi-net: property list ...ersion="1.0">.<dict>..<key>IO80211InterfaceIPConfigurationBusy</key>..<true/>.</dict>.</plist>......................................
+[  94.977] evb10: wifi-net: property list <?xml version="1.0" encoding="UTF-8"?>.<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0
+[  94.977] evb10: wifi-net: property list ...ersion="1.0">.<dict>..<key>IO80211InterfaceIPV4Params</key>..<dict>...<key>IO80211InterfaceIPV4Address</key>...<integer>0</integer>.
+[  95.069] evb10: wifi-net: property list <?xml version="1.0" encoding="UTF-8"?>.<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0
+[  95.075] evb10: wifi-net: property list ...ersion="1.0">.<dict>..<key>IO80211InterfaceWifidEnumeratedInfra</key>..<true/>.</dict>.</plist>.....................................
+
+## scripted touch (run set9, evb10-touch-script=125): swipe up twice (the first does not unlock), then taps on the Settings icon in the Dock (the line of step 2 is lost in the log)
+[ 147.653] evb10: touch: script step 0 at (360,1239) of (720,1280)
+[ 155.656] evb10: touch: script step 1 at (360,1236) of (720,1280)
+[ 171.650] evb10: thr 0 tid 0x932 st 0x1 pri 4/4 sw 11/8 cpu 0 wait -1 ev 0 | user pc 0x1e8888b58 lr 0x1e888c224 sp 0x16
+[ 187.671] evb10: touch: script step 3 at (482,1182) of (720,1280)
+[ 203.655] evb10: touch: script step 4 at (482,1182) of (720,1280)
+# screenshots every 28 s: lock screen at 145 s (before the swipes), home screen from 173 s to the end of the run (300 s) with the Settings icon in the Dock; no Preferences process in any process table
