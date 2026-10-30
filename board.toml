@@ -36,6 +36,9 @@ archives = [
   "apply-armcpu-patches.py",
   "component:ArmCpu",
   "component:AppleKeyStoreState",
+  # IOAESAccelerator, which the original AppleImage4 waits for while it starts on /defaults (see docs/bring-up-notes.zh-CN.md).
+  "component:SoftwareAES",
+  "build-software-aes-bindings.py",
   # The eMMC host subclasses the original IOBlockStorageDevice: compile leaves an object, binding makes the archive.
   "build-evb10-drivers.py Rk3588Emmc",
   "bind-emmc-storage.py",
@@ -158,7 +161,7 @@ source = "device:dts/evb10.dts"
 include_dirs = ["soc:dts"]
 
 [components]
-include = ["ArmDTPlatform", "ArmCpu", "GopFramebuffer", "AppleKeyStoreState", "XnuPrelink", "DarwinBoot"]
+include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "GopFramebuffer", "AppleKeyStoreState", "XnuPrelink", "DarwinBoot"]
 
 [adt]
 
