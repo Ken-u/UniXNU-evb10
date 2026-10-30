@@ -1,0 +1,117 @@
+AP6398S (BCM4359) Wi-Fi module identified over SDIO from U-Boot on the RK3588 EVB10 V10.
+Board reset by tools/board/hw-reset.sh, U-Boot reached with tools/board/uboot-enter.sh (--enter), no kernel running.
+Command:  cd uefi-evb10 && tools/board/hw-reset.sh reset; sleep 25; python3 tools/board/sdio-probe.py --enter --log LOG
+Revision: uefi-evb10 0d553069b92a5181ea5f41250f755e8aba96cda0 (sdio-probe.py; this run used the same file from the working tree, committed right after)
+Date:     2026-10-30 15:42 (UTC+8)
+
+== sdio-probe.py output ==
+[15:42:23] 0. USB: [18d1:d001 ]
+[15:42:23] 1. adb reboot bootloader
+[15:42:31] 2. 25 x 100 ms Ctrl+C（单 fd）
+[15:42:37] 拿到 => 提示符。板子停在 U-Boot；用 uboot-cmd.py 发命令。
+== 1. IOMUX + WL_REG_ON low
+== 2. WL_REG_ON high, wait 1 s (pwrseq wants 200 ms)
+== 3. clock + controller + CMD0/CMD5/CMD3/CMD7
+   CLK pad (GPIO2_B3): high in 7 of 10 samples -> toggling
+   cmd5a: RINTSTS 0x4 RESP0 0x30ffff00
+   cmd5b: RINTSTS 0x4 RESP0 0xb0ffff00
+   cmd5c: RINTSTS 0x4 RESP0 0xb0ffff00
+   cmd3: RINTSTS 0x4 RESP0 0x00010000
+   OCR 0xffff00, 3 IO functions, RCA 1
+   CCCR rev 0x43, capabilities 0x02, CIS at 0x10ac
+   CIS: 20 04 d0 02 59 43 21 02 0c 00 22 04
+   CISTPL_MANFID: 02d0:4359
+   IORx 0x02, CHIPCLKCSR 0x48 (ALP available = 0x40)
+   ChipCommon CHIPID 0x17294359: chip 0x4359 rev 9
+RESULT: AP6398S (BCM4359) identified over SDIO
+
+== raw console values behind the report (uboot-cmd.py log, abridged to the lines that carry a result) ==
+Register map: 0xfd5f8044/48 BUS_IOC GPIO2A_H / GPIO2B_L IOMUX; 0xfd7c092c CLKGATE_CON(75); 0xfd7c05b0 CLKSEL_CON(172);
+0xfec30070 GPIO2 EXT_PORT (bit 11 = CLK pad); 0xfe2d0044 RINTSTS (0x4 = command done); 0xfe2d0030 RESP0.
+CMD52 answers carry the data byte in RESP0[7:0] and the SDIO flags in RESP0[15:8].
+@@mux
+fd5f8044: 00002200 00002222
+@@gate
+fd7c092c: 00000000
+fd7c05b0: 00000200
+@@clkpad
+fec30070: ff323fc9
+fec30070: ff323fcb
+fec30070: ff3237c9
+fec30070: ff3237c9
+fec30070: ff323fc9
+fec30070: ff323fcb
+fec30070: ff3237cb
+fec30070: ff323fcb
+fec30070: ff323fc9
+fec30070: ff323fc9
+@@cmd0
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: 00000000
+@@cmd5a
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: 30ffff00
+@@cmd5b
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: b0ffff00
+@@cmd5c
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: b0ffff00
+@@cmd3
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: 00010000
+@@cmd7
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: 00001e00
+@@cccr0
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: 00001043
+@@caps
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: 00001002
+@@ior
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: 00001002
+@@clkr2
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: 00001048
+@@id0
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: 00001059
+@@id1
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: 00001043
+@@id2
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: 00001029
+@@id3
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0044: 00000004
+fe2d0030: 00001017

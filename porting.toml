@@ -14,7 +14,7 @@ paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", 
 inputs = ["ARM64 profile, rk3588 SoC source pinned in feeds.toml, iPadOS 17.7.11 build 21H461 profile, evb10_defconfig and evb10_display_defconfig, submodules package/Mali and package/Rk3588Emmc."]
 configuration = ["board.soc_source = rk3588; board.os_profile = ipados-17.7.11-21H461; schema_version = 2.", "kernel.config_fragments = arch common, soc rk3588, os ipados; the defconfig applies last and switches off what the OS profile enables for other hardware (NATIVE_ADRENO, SOURCE_MOCKFS).", "kernel.patch_series = arch, soc, os, device in that order.", "payload.kernel_args carries the frame-rate group as defaults: zero-copy scanout with the GPU job as the fence (evb10-vop-direct=1, evb10-vop-fence=1), the GPU at 750 MHz (mali-pll=1, mali-div=1), the device's YCbCr filter (mali-ycbcr-filter=device), asynchronous surface flush (mali-aflush=1), cpumask=31, mali-epri=50 and sched-slowcpus=240; the comment above the list says what each one does."]
 procedure = ["From the UniXNU checkout run ./unixnu defconfig evb10_defconfig -D ../UniXNU-evb10, then ./unixnu fetch and ./unixnu status --json with the same -D.", "For a local SoC checkout copy local.toml.example to local.toml.", "Run scripts/build-evb10-kernel.sh for the two-pass kernel build."]
-findings = ["The [adt.defaults.u32] table of board.toml must carry sleep-disabled = 1 and vmm-present = 1; the OS profile only supplies kern.maxvnodes. vmm-present backs kern.hv_vmm_present: without it watchdogd traps with SIGTRAP three times and the kernel panics when the third instance exits (seen in a rebuild from a clean tree, fixed in the clean-directory rerun).", "Arrays replace inherited values, so board.toml lists every archive, fragment and trust-cache digest it needs.", "The display archive is made from the kernel of an earlier display-less pass, which is why two defconfigs exist and why the build script runs them in order.", "A device script named like a UniXNU script shadows it in the build tree; the board driver builder is therefore named build-evb10-drivers.py and does not replace build-arm-driver.py.", "A boot with the committed defaults and nothing else but the scripted swipes and the command-buffer timeline (run v1) held the GPU at 750 MHz, the Cortex-A76 cores at 2.23 GHz and 52.6 frames per second while the finger was down (swipes 3 to 11), and ended its 235 s capture without a panic or a stalled GPU group."]
+findings = ["The [adt.defaults.u32] table of board.toml must carry sleep-disabled = 1 and vmm-present = 1; the OS profile only supplies kern.maxvnodes. vmm-present backs kern.hv_vmm_present: without it watchdogd traps with SIGTRAP three times and the kernel panics when the third instance exits (seen in a rebuild from a clean tree, fixed in the clean-directory rerun).", "Arrays replace inherited values, so board.toml lists every archive, fragment and trust-cache digest it needs.", "The display archive is made from the kernel of an earlier display-less pass, which is why two defconfigs exist and why the build script runs them in order.", "A device script named like a UniXNU script shadows it in the build tree; the board driver builder is therefore named build-evb10-drivers.py and does not replace build-arm-driver.py.", "A boot with the committed defaults and nothing else but the scripted swipes and the command-buffer timeline (run v1) held the GPU at 750 MHz, the Cortex-A76 cores at 2.23 GHz and 52.6 frames per second while the finger was down (swipes 3 to 11), and ended its 235 s capture without a panic or a stalled GPU group.", "The evidence/ directory holds one curated excerpt per verified checkpoint, named <topic>-<date>.txt. Excerpts of kernel runs name the run command and tag; the Wi-Fi identity excerpt (evidence/wifi-sdio-id-20261030.txt) comes from U-Boot with no kernel running, so it names the probe script and the uefi-evb10 revision that holds it."]
 completion = ["Every source pin resolves, ./unixnu status lists the intended patch order, and both defconfigs materialise."]
 limits = ["The format 2 configuration has been materialised and checked with status and tree; a full kernel build with it is recorded under Image assembly."]
 next_action = ["Pin the Mali and Rk3588Emmc submodules to released commits when they change."]
@@ -39,7 +39,7 @@ paths = ["proprietary-files.txt", "scripts/extract-files.py", "scripts/build-mal
 inputs = ["edk2-rk3588 firmware built by uefi-evb10 (SPI NOR image), TF-A at EL3 with PSCI over SMC, UEFI GOP frame buffer and the Mali CSF firmware listed in proprietary-files.txt."]
 configuration = ["board.toml has no [firmware] section: the unixnu firmware step builds Mu-Silicium, and this board boots edk2-rk3588 built by uefi-evb10.", "payload.loader = firmware: DarwinBoot is inside the firmware volume.", "proprietary-files.txt pins mali_csffw.bin by SHA-256; scripts/extract-files.py places it in .cache/firmware."]
 procedure = ["Build the firmware in uefi-evb10 (build.sh) and flash or boot it as that repository describes.", "Run scripts/extract-files.py SOURCE, then the kernel step; scripts/build-mali-firmware.py writes package/Mali/mali_csffw.inc."]
-findings = ["The firmware hands the kernel EL1 with the MMU off and PSCI on SMC; secondary cores started by CPU_ON arrive at EL2 and the SoC patch drops them to EL1.", "The firmware leaves the eMMC in HS400 and UART2 at 1.5 Mbaud; the drivers rely on both."]
+findings = ["The firmware hands the kernel EL1 with the MMU off and PSCI on SMC; secondary cores started by CPU_ON arrive at EL2 and the SoC patch drops them to EL1.", "The firmware leaves the eMMC in HS400 and UART2 at 1.5 Mbaud; the drivers rely on both.", "proprietary-files.txt also lists the AP6398S Wi-Fi firmware and nvram from the Rockchip Android vendor tree as optional entries (fw_bcm4359c0_ag.bin for the BCM4359 C0, revision 9, read over SDIO); no driver loads them yet. The fw_bcm4359c51a2_ag.bin of that directory is a 4362a2 build and does not fit this module."]
 completion = ["Firmware enters DarwinBoot, publishes the GOP frame buffer and keeps the memory reservations of the board."]
 limits = ["Firmware and its boot flow are documented in uefi-evb10; this repository only pins the inputs."]
 next_action = ["Record the firmware commit next to each image verification."]
@@ -236,17 +236,28 @@ revision = "833f90fb52890090ad2bdd79285cc527b00d3ead"
 
 [[area]]
 id = "network"
-status = "not-applicable"
+status = "planned"
 components = []
 paths = ["docs/network.md"]
-inputs = ["No network driver is part of this port."]
-configuration = ["None."]
-procedure = ["None."]
-findings = ["The board's Ethernet and Wi-Fi controllers are not used by the userland."]
-completion = ["Out of scope."]
-limits = ["Network is outside the current scope of the board."]
-next_action = ["Choose a network device when the scope extends."]
-evidence = []
+inputs = ["AP6398S module (Broadcom BCM4359 C0, Wi-Fi on SDIO 3.0 and Bluetooth on UART9) behind the DW-MSHC at 0xfe2d0000 (SPI 204); WL_REG_ON = GPIO0_C4, 32.768 kHz low-power clock from the HYM8563 RTC CLKOUT, WL_HOST_WAKE = GPIO0_B2 (stock device tree).", "Firmware fw_bcm4359c0_ag.bin and nvram_ap6398s.txt from the Rockchip Android vendor tree, listed as optional entries in proprietary-files.txt.", "The catalog has no SDIO or Broadcom component (Ath12kWifi is Qualcomm PCIe); the reference for the protocol is Linux brcmfmac."]
+configuration = ["No kernel driver is built for it yet. The identity probe runs from U-Boot: sdiom0 pins on function 2 through GPIO2A_IOMUX_SEL_H / GPIO2B_IOMUX_SEL_L in BUS_IOC, WL_REG_ON high, cclk_src_sdio from xin24m, DW-MSHC CLKDIV 0x1e (400 kHz), 1-bit."]
+procedure = ["Reset the board (uefi-evb10 tools/board/hw-reset.sh reset) and run uefi-evb10 tools/board/sdio-probe.py --enter; it powers the module, runs CMD0, CMD5, CMD3, CMD7, reads CCCR and the CIS with CMD52 and reads the ChipCommon CHIPID through the backplane window."]
+findings = ["The module answers: CMD5 returns OCR 0xb0ffff00 (3 IO functions), the CIS manufacturer ID is 02d0:4359 and ChipCommon CHIPID is 0x17294359, chip 0x4359 revision 9 (C0), with the ALP clock available after the request (CHIPCLKCSR 0x48).", "The IOMUX registers of GPIO2 are in BUS_IOC (0xfd5f8044 and 0xfd5f8048). The offsets of the rk3588_ds_regs and rk3588_p_regs tables of pinctrl-rockchip.c are drive strength and pull in other IOC blocks; written as function selects they leave the SDIO CLK pad low and the card never answers CMD5.", "The HYM8563 CLKOUT (the module's low-power clock) is enabled after reset, so U-Boot and the kernel need no setup for it.", "The response register read right after a command write can still hold the previous response at 400 kHz; read RINTSTS a few times first."]
+completion = ["Planned. The first checkpoint (power up and read the chip identity) is reached from U-Boot. Done means the kernel brings the card up the same way, the firmware runs, a scan lists access points and a WPA2 join carries traffic."]
+limits = ["Nothing runs in the kernel: no SDIO host driver, no firmware download, no network interface. Only 400 kHz 1-bit was tried; 4-bit, high speed, the SDIO interrupt (SPI 204 and the in-band interrupt) and WL_HOST_WAKE were not exercised."]
+next_action = ["Write the DW-MSHC SDIO host for the kernel and read the same identity through it.", "Add a Broadcom FullMAC component (backplane access, firmware and nvram download, SDPCM/BCDC, events) with the station interface of nw_abi.h, then adapt WifiNet.cpp."]
+
+[[area.evidence]]
+kind = "device"
+reference = "evidence/wifi-sdio-id-20261030.txt"
+result = "From a freshly reset board at the U-Boot prompt, the AP6398S answered on SDIO: OCR 0xb0ffff00 with 3 IO functions, RCA 1, CIS manufacturer 02d0:4359, ChipCommon CHIPID 0x17294359 (BCM4359 revision 9), CHIPCLKCSR 0x48; the CLK pad toggled in 7 of 10 samples."
+command = "cd uefi-evb10 && tools/board/hw-reset.sh reset; sleep 25; python3 tools/board/sdio-probe.py --enter --log LOG"
+revision = "0d553069b92a5181ea5f41250f755e8aba96cda0"
+
+[[area.evidence]]
+kind = "source"
+reference = "docs/network.md"
+result = "Hardware, the checkpoint, findings, firmware candidates and what is missing"
 
 [[area]]
 id = "audio"

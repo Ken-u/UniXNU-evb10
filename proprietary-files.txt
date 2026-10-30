@@ -7,3 +7,13 @@
 # (vendor/rockchip/common/gpu/MaliG610/firmware). The current linux-firmware file of the same name is a different
 # build and has not been tested here. scripts/build-mali-firmware.py turns it into package/Mali/mali_csffw.inc.
 mali_csffw.bin|8e7c821a55ca1c345cc79f61243616dd25fc35b81f090946f302886d67712df5
+
+# The AP6398S Wi-Fi module is a Broadcom BCM4359 C0 (chip id 0x4359, revision 9, read over SDIO: evidence/wifi-sdio-id-20261030.txt).
+# These come from the Rockchip Android vendor tree (vendor/rockchip/common/wifi/firmware; pass that directory as SOURCE with
+# --section "AP6398S Wi-Fi"). fw_bcm4359c0_ag.bin is Ampak's 4359c0 SDIO build 9.87.51.11.102 (2023-08-21), nvram_ap6398s.txt is
+# AP6398S_NVRAM_V4.2_20221130. fw_bcm4359c51a2_ag.bin of the same directory is a 4362a2 build and does not fit this module.
+# No driver loads them yet; they are optional until one does.
+# AP6398S Wi-Fi
+-fw_bcm4359c0_ag.bin|84eeacc049cf7e4e7a8c3f42f5dccf293c25ce6518bedf3d3a9a7c7256f1380e
+-nvram_ap6398s.txt|bab1467a7d893ec04decb2dd642af09f5b7b6d13a5dc8d2762ecaffa95e67468
+-4359_cypress_auto.clm_blob|9bf2b974c6caf4aa60a6a52440b275d579e25af622a6bcb0020b32a20d018145
