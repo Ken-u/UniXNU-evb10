@@ -1,0 +1,52 @@
+iPadOS 17.7.11 uses the AP6398S as its Wi-Fi interface en0 on the RK3588 EVB10 V10: IOKit goes quiet, the userland's own DHCP client gets a lease,
+DNS and TCP carry traffic, no panic (package/Evb10Wifi with WifiNet.cpp, evb10-wifi=5).
+Command:  cd uefi-evb10 && EXTRA_KERNEL_ARGS="evb10-wifi=5" CAPTURE_SECS=200 EARLY_STOP=0 tools/xnu-probe/run-kernel.sh wifi19
+Revision: 7552f86 (kernel and payload built from that tree; only comments of Evb10Wifi.cpp and nw_abi.h were edited after the build)
+Date:     2026-10-30 20:30 (UTC+8); the second section is run wifi17 (a 240 s run of the same level with an earlier transmit queue)
+Kernel arguments: the committed defaults of board.toml plus evb10-wifi=5. The network and its passphrase come from .cache/firmware/join.txt (local,
+git-ignored, embedded by scripts/build-wifi-firmware.py); the passphrase is not in this file. Names, the last three bytes of every MAC address and
+the private network addresses are removed.
+What this shows, in order: the firmware's join takes 2.2 s (the same sequence as evb10-wifi=4); the interface en0 is registered; IOKit is quiet 26 s
+into the boot log (it was not quiet before the software AES was added; see docs/network.md); the userland's DHCP client then sends and receives
+DHCP and en0 has its address (the 83 s status block is the first with DHCP packets: 0 at 73 s); DNS and 36 outgoing TCP connections follow.
+Nothing here drives the network from the kernel: the DHCP, DNS and TCP packets are the userland's. Nobody looked at the screen or Settings.
+wifi19 is a quiet run (0.13 MB of TCP payload); wifi17 shows the case with a download. Hardware observation; host-side checks are in the commit message.
+
+--- run wifi19: the join, the interface and the first lease
+[  23.021] evb10: wifi: function 2 ready after 232 ms from the release (IORx 06)
+[  23.021] evb10: wifi: firmware: wl0: Aug 21 2023 11:05:11 version 9.87.51.11.102 (g58ed01d) FWID 01-7f347e2f
+[  23.021] evb10: wifi: MAC address 9c:b8:b4:xx:xx:xx (0)
+[  23.039] evb10: wifi: infrastructure mode 0, not an access point 0
+[  23.069] evb10: wifi: WLC_UP 0
+[  23.069] evb10: wifi-net: en0 is up, hardware address 9c:b8:b4:xx:xx:xx, capabilities 0x0
+[  23.069] evb10: wifi: joining "<ssid>" (WPA2-PSK, firmware supplicant)
+[  25.217] evb10: wifi: event 3 status 0 reason 0 flags 0 authtype 0 data 0 from e2:05:a4:xx:xx:xx
+[  25.253] evb10: wifi: event 16 status 0 reason 0 flags 1 authtype 0 data 22 from e2:05:a4:xx:xx:xx
+[  25.253] evb10: wifi: event 7 status 0 reason 0 flags 0 authtype 0 data 210 from e2:05:a4:xx:xx:xx
+[  25.315] evb10: wifi: event 46 status 6 reason 0 flags 0 authtype 0 data 0 from 00:00:00:xx:xx:xx
+[  25.315] evb10: wifi: join succeeded (result 0)
+[  25.315] evb10: wifi: connected to e2:05:a4:xx:xx:xx on 2412 MHz, -84 dBm
+[  26.059] evb10: wifi-net: IOKit is quiet
+[  33.061] evb10: wifi-net: en0 address none, packets in 1 out 0; frames to the stack 1, refused 0 (last 0)
+[  83.132] evb10: wifi-net: en0 address 192.168.x.y, packets in 15 out 21; frames to the stack 15, refused 0 (last 0)
+[  83.132] evb10: wifi-net: tx queued 21 sent 21 failed 0 dropped 0, rx delivered 15 dropped 0
+[  83.132] evb10: wifi-net: in arp 10 ip4 5 dhcp 2 ip6 0 other 0
+
+--- run wifi19: the counters of the last status block (every 10 s, at 193 s)
+[ 193.272] evb10: wifi-net: en0 address 192.168.x.y, packets in 392 out 527; frames to the stack 392, refused 0 (last 0)
+[ 193.272] evb10: wifi-net: tx queued 527 sent 527 failed 0 dropped 0, rx delivered 392 dropped 0
+[ 193.272] evb10: wifi-net: in arp 68 ip4 324 dhcp 2 ip6 0 other 0
+[ 193.272] evb10: wifi-net: out arp 70 ip4 433 dhcp 2 ip6 20 other 0
+[ 193.272] evb10: wifi-net: in tcp 250 (syn-ack 31, 128185 payload bytes) udp 74 (dns 45) icmp 0
+[ 193.272] evb10: wifi-net: out tcp 345 (syn 36, 28177 payload bytes) udp 83 (dns 45) icmp 3
+[ 193.272] evb10: wifi-net: rx no buffer 0, chained 49, longest frame 1514, frames given up on at the full transmit queue 0
+
+--- run wifi17 (240 s; the transmit queue then held 32 frames and frames were dropped without waiting): the counters of the last status block;
+--- the system downloaded 105 MB through en0
+[ 233.340] evb10: wifi-net: en0 address 192.168.x.y, packets in 76550 out 26844; frames to the stack 76550, refused 0 (last 0)
+[ 233.340] evb10: wifi-net: tx queued 26844 sent 26844 failed 0 dropped 12006, rx delivered 76550 dropped 0
+[ 233.340] evb10: wifi-net: in arp 109 ip4 76441 dhcp 4 ip6 0 other 0
+[ 233.340] evb10: wifi-net: out arp 111 ip4 38720 dhcp 4 ip6 15 other 0
+[ 233.340] evb10: wifi-net: in tcp 76366 (syn-ack 182, 105367530 payload bytes) udp 75 (dns 63) icmp 0
+[ 233.341] evb10: wifi-net: out tcp 38620 (syn 162, 198012 payload bytes) udp 98 (dns 63) icmp 0
+[ 233.357] evb10: wifi-net: rx no buffer 0, chained 334, longest frame 1466

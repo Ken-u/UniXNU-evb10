@@ -1,7 +1,9 @@
 # Wi-Fi (AP6398S) on the EVB10
 
-Status: **planned**. The module is powered, identified over SDIO and its firmware is downloaded and started by the kernel
-(HT clock available, function 2 ready); there is no protocol layer (SDPCM/BCDC), network interface or Apple80211 glue yet.
+Status: **implemented** (opt-in with a boot argument). The kernel brings the module up, downloads its firmware, scans, joins a WPA2-PSK
+network with the firmware's supplicant, and serves it to iPadOS as `en0`: the OS's own DHCP client gets a lease, DNS resolves and TCP
+carries traffic (about 100 MB in one 240 s run). What is observed and what is not is in the checkpoints below. It is off in the committed
+boot arguments: `evb10-wifi=N` is added per run, and the network to join comes from a local file that is not in the repository.
 This page keeps what is known, what was observed on the board, and what comes next.
 
 ## Hardware
@@ -79,6 +81,52 @@ The images are embedded in the kernel by `scripts/build-wifi-firmware.py` (a `bo
 `package/Evb10Wifi/wifi_fw.inc` is git-ignored) from `.cache/firmware`, which `scripts/extract-files.py` fills from the vendor tree;
 without the files the driver prints that nothing is embedded and stops after the bus switch.
 
+## Checkpoint 4: the firmware answers and a scan lists access points (done)
+
+`evb10-wifi=3`. After the download the driver speaks SDPCM on function 2 (a 4-byte hardware header with the length and its complement,
+a software header with sequence, channel and data offset; flow control and the credit window come back in the receive headers) and
+BCDC on top of it (ioctls on channel 0, events on channel 1, data on channel 2). It reads the version, the MAC address and the CLM
+version with iovars, sets `bus:txglom` to 0 (no superframes from the chip) and `mpc` to 0, programs `event_msgs`, sends `WLC_UP`,
+and runs an `escan` three times.
+
+Observed on the board (`evidence/wifi-scan-20261030.txt`, run `wifi5`): `wl0: Aug 21 2023 11:05:11 version 9.87.51.11.102`, CLM API 15.0,
+scan version 1; the scans take 1.5 to 1.7 s and list 35, 38 and 43 networks on both bands (2.4 GHz 20 and 5 GHz 15 in the first list).
+
+## Checkpoint 5: a WPA2-PSK join and a data path of the driver's own (done)
+
+`evb10-wifi=4`. The credentials come from `.cache/firmware/join.txt` (SSID on the first line, passphrase on the second; local, git-ignored,
+embedded into the kernel by `scripts/build-wifi-firmware.py`). The join is the firmware's: `WLC_SET_INFRA` 1 and `WLC_SET_AP` 0 first,
+then `bsscfg:wpa_auth` 0x80 (WPA2-PSK), `bsscfg:auth` 0, `bsscfg:wsec` 4 (AES), `sup_wpa` 1, the passphrase through `WLC_SET_WSEC_PMK`, and
+`bsscfg:join` (`ext_join`, 68 bytes). The events 3 (auth), 16 (link), 7 (assoc) and 46 (`PSK_SUP`, status 6 = keyed) mean the firmware's
+4-way handshake finished. The driver then builds DHCP, ARP and ICMP echo frames itself and sends them through the same
+transmit path that `nw_wifi_tx` uses (BCDC data header `{0x20, 0, 0, 0}` plus the Ethernet frame on channel 2).
+
+Observed on the board (`evidence/wifi-join-20261030.txt`, run `wifi9b`): the join takes 2.1 s, DHCP binds 3.1 s later, the router's MAC address
+is resolved and 4 of 4 pings are answered; 11 frames sent, none failed or dropped.
+
+## Checkpoint 6: iPadOS uses the interface (done)
+
+`evb10-wifi=5` is the same without the self-test, and `package/Evb10Wifi/WifiNet.cpp` (the network side, adapted from the sheng port and the
+`nw_abi.h` interface of Ath12kWifi) serves it to the OS:
+
+* `en0` is an `ifnet` made with `ifnet_allocate_extended` (`IFNET_INIT_LEGACY | IFNET_INIT_NX_NOAUTO`: without the second flag the stack
+  puts a compatibility nexus in front of a Wi-Fi `en` interface and input no longer reaches the stack the way a legacy driver's does),
+  Ethernet framing, `bpf_attach` (the DHCP client sends through it while the interface has no address), the module's own MAC address.
+* The registry entries the userland looks for (`IONetworkStack`, `IO80211Controller`, `IO80211Interface`) are classes registered late: the
+  object has its static initializer removed (`scripts/build-evb10-wifinet.py`) and the driver runs it between `OSMetaClass::preModLoad`
+  and `postModLoad`, once the interface exists.
+* The Apple80211 requests of the userland (state, SSID, BSSID, channel, RSSI, scan results, country, ...) are answered from the station state
+  and the BSS list; link-up and link-down are posted as kernel events.
+
+Observed on the board (`evidence/wifi-os-20261030.txt`, run `wifi19`, 200 s, no panic): the join takes 2.2 s, IOKit is quiet 26 s into the boot
+log, the userland's own DHCP client has its address by the 83 s status line (no DHCP packet at 73 s), and DNS and 36 outgoing TCP connections
+follow. An earlier 240 s run (`wifi17`) received 105 MB of TCP payload through `en0` (the best 10 s interval 34 Mbit/s) with the link up
+throughout. The packets are the userland's; the kernel only carries them. Nobody looked at the screen or at Settings.
+
+**Side effects.** Once the system has a network it behaves like a device that has one: it downloads assets in the background
+(`mobileassetd`, `nsurlsessiond`) and the 2 GiB Data window (about 250 MB free after a normal boot) can fill up within a few minutes,
+after which those daemons see `ENOSPC`; the next boot had its free space back. Nothing else is affected, which is why Wi-Fi stays opt-in.
+
 ## Findings from the bring-up
 
 * **The IOMUX registers are in BUS_IOC, not in the tables `pinctrl-rockchip.c` shows first.** For GPIO2_A4..B7 the function
@@ -97,6 +145,33 @@ without the files the driver prints that nothing is embedded and stops after the
 * U-Boot here has no `sleep` and no `i2c` command; the script waits between ssh round trips, and the RTC was checked with a
   GPIO bit-bang I2C built from `mw.l` macro lines.
 
+* **Without `WLC_SET_INFRA` a join makes an ad-hoc network.** The firmware's default is IBSS: `bsscfg:join` then produced a link-up event with a
+  random BSSID and never a key exchange, which looks like success in the event log. `WLC_SET_INFRA` 1 and `WLC_SET_AP` 0 before `WLC_UP` fix it
+  (`brcmf_cfg80211_change_iface`).
+* `bus:txglom` is set to 0 so the chip sends one frame per SDPCM packet: the reader does not unpack the superframes the firmware's default
+  would batch.
+* The firmware's own supplicant does WPA2-PSK: `bsscfg:wpa_auth` 0x80, `bsscfg:wsec` 4, `sup_wpa` 1 and the passphrase through
+  `WLC_SET_WSEC_PMK` are enough; event 46 (`PSK_SUP`) with status 6 is the keyed state. The host handles no EAPOL.
+* `cur_etheraddr` reads the module's own address from its OTP (`9c:b8:b4:...`), not the default in the nvram (`00:90:4c:27:80:01`), so
+  the interface has a unique address with nothing to configure.
+* **SDPCM flow control is credit based.** The transmit sequence starts at 255 and the credit window at 0 (as in `brcmfmac`); a frame is sent only
+  while `tx_max - tx_seq` allows it, and the credits come back in the headers of whatever the chip sends. Under a bulk download the chip is busy
+  with the receive side and the credits arrive slowly, so the transmit queue fills. With a 32-frame queue and no waiting, a run that received
+  105 MB dropped 12006 of 38850 frames (acknowledgements among them). The queue now holds 128 frames and `if_output` waits up to 40 ms for room
+  before it gives a frame up: in a run that received 8 MB, 1116 attempts found the queue full and were retried, and 19 of 2315 frames were
+  finally given up. The 105 MB case was not repeated with the new code (the system downloaded little in the later runs).
+* **The userland waits for IOKit to be quiet, and the original `AppleImage4` never lets it.** The network configuration (the interface
+  namer) and the wireless daemon start their work after `IOKit` has been quiet (about five minutes of waiting, then they go on). With the
+  Wi-Fi interface present the first lease came at 330 s. The cause was not the network: `AppleImage4` matches on `/defaults` and, in
+  its `start`, waits for `IOAESAccelerator` without a timeout (found by reading its code in the kernel image: `finalize` calls
+  `waitForMatchingService(serviceMatching("IOAESAccelerator"), UINT64_MAX)`). Nothing provided that class, so `defaults` stayed busy and
+  the registry never went quiet (measured in the Wi-Fi runs; nothing in the cause is specific to them). UniXNU's software AES (`SoftwareAES`, the `IOAESAccelerator` of the ARM64 profile) is a plain
+  AES-CBC in software and needs no SoC engine: with it (`CONFIG_XNU_NATIVE_AES=y` in `rk3588.config`, the `SoftwareAES` component and
+  `build-software-aes-bindings.py` in `board.toml`) IOKit is quiet 26 s after start and the lease is there in the 73 s to 83 s status lines of the three
+  runs after the change.
+* `en0` needs `IFNET_INIT_NX_NOAUTO`, `bpf_attach` and the registry entries `IONetworkStack`, `IO80211Controller` and `IO80211Interface`
+  before the userland treats it as the Wi-Fi interface; the three classes are registered late (see checkpoint 6).
+
 ## Firmware and board data
 
 Recorded as optional entries in `proprietary-files.txt` (section "AP6398S Wi-Fi", source: the Rockchip Android vendor tree):
@@ -104,29 +179,32 @@ Recorded as optional entries in `proprietary-files.txt` (section "AP6398S Wi-Fi"
 | File | What it is |
 | --- | --- |
 | `fw_bcm4359c0_ag.bin` | Ampak 4359c0 SDIO firmware 9.87.51.11.102 (2023-08-21); the chip is revision 9 |
-| `nvram_ap6398s.txt` | `AP6398S_NVRAM_V4.2_20221130`, board type `0x0812`, board revision `0x1301`; it carries a fixed default MAC address |
+| `nvram_ap6398s.txt` | `AP6398S_NVRAM_V4.2_20221130`, board type `0x0812`, board revision `0x1301`; it carries a default MAC address that the chip does not use (it reports the one in its OTP) |
 | `4359_cypress_auto.clm_blob` | regulatory data (CLM); whether the C0 build wants it is not decided |
 
 `fw_bcm4359c51a2_ag.bin` in the same directory is a 4362a2 build, not for this module. The kernel embeds the first two (checkpoint
-3); the CLM blob is not loaded: the firmware starts without it, and it is only needed once regulatory settings matter.
+3); the CLM blob is not loaded: the firmware starts without it (its built-in regulatory data was enough for the scans and the join above).
+
+The network to join is not a repository file: `.cache/firmware/join.txt` (SSID, then passphrase if any; git-ignored) is embedded into the
+kernel image by `scripts/build-wifi-firmware.py`. Without it levels 4 and 5 start and do not join.
 
 ## What is missing
 
-1. **A fuller SDIO host.** `Evb10Wifi` runs 4-bit at about 25 MHz with polled CMD53 through the FIFO, one-shot at start-up. Still to
-   come: the sample and drive phases in `SDIO_CON0/1` (0xfd7c0c24/28) and 50 MHz or more, the host's internal DMA for the
-   frames, and the interrupt (SPI 204, a fixed number: the node must not export `interrupts`; function 1's in-band interrupt).
-   The eMMC host (`dwcmshc`, `Rk3588Emmc`) is a different controller.
-2. **A Broadcom FullMAC component.** The catalog only has `Ath12kWifi` (Qualcomm, PCIe). The station interface of its
-   `nw_abi.h` (`nw_wifi_scan/connect/tx/...`, `nw_wifi_events`) can stay; the board interface changes from PCIe BAR and MSI to
-   SDIO function accesses. The reference for the protocol is Linux `brcmfmac` (`sdio.c`, `bcmsdh.c`, `chip.c`): backplane
-   windows, firmware and nvram download, SDPCM/BCDC framing, the firmware events.
-3. **The OS side.** `WifiNet.cpp` of UniXNU-sheng adapts the network service and the Apple80211 requests; it would be reused
-   with the new component. The device needs its own MAC address (the nvram carries a fixed default).
-4. **Interrupts.** SDIO in-band interrupt on function 1, and `WL_HOST_WAKE` (GPIO0_B2) for wake-up.
+1. **Speed.** The SDIO host is polled at about 25 MHz, with no DMA and no interrupt. The best 10 s interval of the 105 MB run carried 42.6 MB of
+   TCP payload (34 Mbit/s) and the average over the traffic was about 5 Mbit/s, with the radio at -80 dBm on 2.4 GHz; whether the host or
+   the radio is the limit was not separated. Still to come: the sample and drive phases in `SDIO_CON0/1` (0xfd7c0c24/28) and 50 MHz or more, the
+   host's internal DMA for the frames, and the interrupt (SPI 204, a fixed number: the node must not export `interrupts`; function 1's
+   in-band interrupt) instead of the polling worker. The eMMC host (`dwcmshc`, `Rk3588Emmc`) is a different controller.
+2. **Settings.** Nobody has looked at the Wi-Fi pane or joined from it on the board; the checks are the log and the traffic. The join at boot
+   is the file's network. The association request of the userland (`kAssociate`, with a passphrase or a derived key) is passed to
+   `nw_wifi_connect`, but that path was not exercised.
+3. **Roaming, power save and wake.** One roam event (`event 19`) was seen and the link stayed up; `WL_HOST_WAKE` (GPIO0_B2) and power save
+   (`mpc` is 0, the radio stays on) are not used. 5 GHz joins were not tried (the test network was on 2.4 GHz).
+4. **Background traffic fills the Data window** within minutes of having a network (see the side effects of checkpoint 6). A device with
+   a bigger Data volume or a daemon policy would not have this.
+5. **Bluetooth** (UART9) is not part of this page.
 
 ## Next step
 
-Talk to the running firmware: the SDPCM frame layer on function 2 (the mailbox and the interrupt status of the SDIO core, the
-frame header with sequence and channel), then BCDC iovars and ioctls (`cur_etheraddr`, `ver`, scan) over it, as `brcmfmac` does.
-The firmware's console in RAM (the last word of the RAM points to the shared structure that holds its address) is the way to
-see why it refuses something. That is the start of the Broadcom FullMAC component of the previous section.
+Make the data path fast: the interrupt and the DMA of the host, 50 MHz, and the transmit worker blocked on events instead of polling. After
+that, the join from the userland (Settings) with credentials, and 5 GHz.

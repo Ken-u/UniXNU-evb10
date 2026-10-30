@@ -71,4 +71,8 @@ default boot, 57.5 at best; MaliMetal's `docs/notes.zh-CN.md`, "帧率" and "帧
 buffers miss their 19.3 ms deadline; a 1 GHz GPU (firmware built with `GPU_RAIL_UV=850000` plus `mali-npll=1000`, see
 [`docs/reproduce.md`](docs/reproduce.md)) brings that to 1.6 to 2.5 %. Open items: a right swipe starts about 100 ms after
 a left one (cause not proven), fixed GPU and CPU clocks, interrupt-driven GPU completion, a finger on the touch controller at
-400 kHz (the default 100 kHz was checked by hand), network, audio and power management.
+400 kHz (the default 100 kHz was checked by hand), audio and power management.
+
+Wi-Fi (the AP6398S on SDIO) works, opt-in: with `evb10-wifi=5` and a network in the local `.cache/firmware/join.txt` the firmware joins
+a WPA2-PSK network and iPadOS uses it as `en0` (DHCP, DNS and TCP from the userland; 105 MB received in one 240 s run). The data path is
+polled and slow, and nobody has used the Settings pane yet; [`docs/network.md`](docs/network.md) has the checkpoints and limits.

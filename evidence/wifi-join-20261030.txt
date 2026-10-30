@@ -1,0 +1,44 @@
+The AP6398S joins a WPA2-PSK access point with the firmware's supplicant, gets an address by DHCP and answers pings, all driven by the kernel
+(package/Evb10Wifi, evb10-wifi=4 with its built-in self-test) on the RK3588 EVB10 V10.
+Command:  cd uefi-evb10 && EXTRA_KERNEL_ARGS="evb10-wifi=4" CAPTURE_SECS=100 EARLY_STOP=0 tools/xnu-probe/run-kernel.sh wifi9b
+Revision: UniXNU-evb10 1efa0fc plus the station layer as it was when this ran (the code is committed as 7552f86; the run is from an earlier state of it)
+Date:     2026-10-30 18:50 (UTC+8)
+Kernel arguments: the committed defaults of board.toml plus evb10-wifi=4. The network and its passphrase come from .cache/firmware/join.txt (local, git-ignored),
+embedded by scripts/build-wifi-firmware.py; the passphrase is not in this file.
+What this shows, in order: the chip is put in infrastructure mode (WLC_SET_INFRA; before that a join only made an ad-hoc network with a random BSSID, which looked
+like a link-up event but never produced a key exchange), the join command gives AUTH, LINK up, ASSOC, then PSK_SUP "keyed" (status 6) from the firmware's 4-way
+handshake; the self-test then sends DHCP DISCOVER/REQUEST, ARP and ICMP echo built in the driver through the same transmit path nw_wifi_tx uses. The access
+point answered all of it: lease, router MAC, four of four pings. Names, the leading three bytes kept, the last three bytes of addresses and the private address
+are removed. This is a first on-air result of one run in one place (signal -81 dBm on 2.4 GHz), not a throughput or stability measurement.
+
+[  47.065] evb10: wifi: firmware: wl0: Aug 21 2023 11:05:11 version 9.87.51.11.102 (g58ed01d) FWID 01-7f347e2f 
+[  47.065] evb10: wifi: MAC address 9c:b8:b4:xx:xx:xx (0)
+[  47.083] evb10: wifi: infrastructure mode 0, not an access point 0
+[  47.112] evb10: wifi: WLC_UP 0
+[  47.112] evb10: wifi: join attempt 1 of the file's network
+[  47.112] evb10: wifi: joining "<ssid>" (WPA2-PSK, firmware supplicant)
+[  49.165] evb10: wifi: event 3 status 0 reason 0 flags 0 authtype 0 data 0 from e2:05:a4:xx:xx:xx
+[  49.165] evb10: wifi: event 16 status 0 reason 0 flags 1 authtype 0 data 22 from e2:05:a4:xx:xx:xx
+[  49.165] evb10: wifi: event 7 status 0 reason 0 flags 0 authtype 0 data 210 from e2:05:a4:xx:xx:xx
+[  49.211] evb10: wifi: event 46 status 6 reason 0 flags 0 authtype 0 data 0 from 00:00:00:xx:xx:xx
+[  49.211] evb10: wifi: join succeeded (result 0)
+[  49.211] evb10: wifi: connected to e2:05:a4:xx:xx:xx on 2412 MHz, -81 dBm
+[  49.211] evb10: wifi: self-test: link is up, asking for an address (DHCP)
+[  49.232] evb10: wifi: event 1 status 0 reason 0 flags 0 authtype 0 data 0 from e2:05:a4:xx:xx:xx
+[  49.232] evb10: wifi: event 0 status 0 reason 0 flags 0 authtype 0 data 11 from e2:05:a4:xx:xx:xx
+[  49.232] evb10: wifi: event 52 status 0 reason 0 flags 1800 authtype 0 data 1044 from 9c:b8:b4:xx:xx:xx
+[  52.359] evb10: wifi: self-test: DHCP bound, lease 86400 s
+[  52.359] evb10: wifi:   address 192.168.x.y
+[  52.359] evb10: wifi:   mask 255.255.255.0
+[  52.359] evb10: wifi:   router 192.168.x.y
+[  52.359] evb10: wifi:   dns 192.168.x.y
+[  54.390] evb10: wifi: self-test: router at 54:52:84:xx:xx:xx
+[  55.398] evb10: wifi: self-test: ping 192.168.x.y #1: reply
+[  56.386] evb10: wifi: self-test: ping 192.168.x.y #2: reply
+[  57.393] evb10: wifi: self-test: ping 192.168.x.y #3: reply
+[  58.402] evb10: wifi: self-test: ping 192.168.x.y #4: reply
+[  58.402] evb10: wifi: self-test: finished (frames sent 11 failed 0 dropped 0, received 0)
+[  72.414] evb10: wifi: event 52 status 0 reason 0 flags 1800 authtype 0 data 1044 from 9c:b8:b4:xx:xx:xx
+[  72.730] evb10: wifi: event 3 status 2 reason 0 flags 0 authtype 0 data 0 from e2:05:a4:xx:xx:xx
+[  72.731] evb10: wifi: event 46 status 6 reason 0 flags 0 authtype 0 data 0 from e2:05:a4:xx:xx:xx
+[  99.208] evb10: wifi: event 52 status 0 reason 0 flags 1800 authtype 0 data 1044 from 9c:b8:b4:xx:xx:xx

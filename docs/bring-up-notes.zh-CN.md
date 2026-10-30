@@ -16,6 +16,7 @@
 | 数据卷 | `userdata` 最后 2049 MiB 做持久 Data 卷：首启格式化，重启直接挂载，写入 0 次失败 |
 | 输入 | I2C5 上的 Goodix 触摸，轮询 10 ms；一个 HID 设备接到原版 IOHIDEventDriver |
 | GPU | Mali-G610 → `Mali` 驱动 → PanVK → metal2vulkan → 原版 Metal 前端，锁屏壁纸和时钟整屏合成 |
+| Wi-Fi | AP6398S（BCM4359，SDIO）：内核下载固件、扫描、固件自带的 WPA2-PSK 入网，iPadOS 用它当 `en0`（DHCP、DNS、TCP 都是用户态自己发的）；默认关闭，`evb10-wifi=N` 打开，见 `docs/network.md` |
 
 ## 坑清单（症状 → 原因 → 改法）
 
@@ -47,6 +48,20 @@
 15. **内核命令行最多 1000 字节。** `unixnu` 在 `payload` 步骤拒绝更长的（板子没有动）。`board.toml` 的默认是 884 字节；调试参数用
     `EXTRA_KERNEL_ARGS` 加，同名的替换默认值，总长要算。
 
+16. **IOKit 一直不安静，用户态网络配置等了五分钟。** 症状：Wi-Fi 的 `en0` 早就起来了，iPadOS 的 DHCP 却在 330 秒才出现。
+    原因：用户态的接口命名（configd）和 wifid 要等 IOKit 安静（`waitQuiet`）。原版 `AppleImage4` 匹配 `/defaults`，在 `start` 里
+    无超时地 `waitForMatchingService(serviceMatching("IOAESAccelerator"))`，而没有任何东西提供 `IOAESAccelerator`，`defaults` 就一直忙。
+    （读内核镜像里的代码确认的；一开始怀疑的「等电源根域」是假线索，那是一条无害的早期日志。）
+    改法：打开 UniXNU 的软件 AES（`CONFIG_XNU_NATIVE_AES=y`、`board.toml` 里 `SoftwareAES` 组件和 `build-software-aes-bindings.py`），
+    它只是 `IOAESAccelerator` 后面的软件 AES-CBC，不需要 SoC 加密引擎；之后启动日志约 26 秒 IOKit 就安静了。
+    这个问题和 Wi-Fi 无关，只是 Wi-Fi 让它露了出来（`wifi-net: IOKit busy ...` 日志每秒列出忙的服务，安静后打印 `IOKit is quiet`）。
+17. **入网要先设基础设施模式。** 固件默认是 ad-hoc（IBSS）：不调 `WLC_SET_INFRA 1` / `WLC_SET_AP 0` 直接 `bsscfg:join`，会得到「链路已连」事件
+    和一个随机 BSSID，却永远没有四次握手。另外 `bus:txglom` 要设成 0。
+18. **有了网络，Data 卷会被填满。** iPadOS 后台自己下载资源（`mobileassetd`、`nsurlsessiond`），2 GiB 的 Data 窗口在联网几分钟内写满
+    （这两个守护进程收到 `ENOSPC`）；下一次启动空间又回来了。所以 Wi-Fi 保持「按参数打开」。
+19. **SDPCM 发送是信用制。** 大流量下载时芯片的信用回得慢，发送队列会满：32 帧队列没有等待时，收 105 MB 丢了 12006 帧；
+    现在队列 128 帧，`if_output` 最多等 40 ms，8 MB 的那一轮丢了 19 帧（重现 105 MB 没做）。
+
 ## 还欠的
 
 - 滚动：`board.toml` 的默认参数现在带着帧率的全套（零拷贝扫描 + GPU 栅栏、设备的 YCbCr 滤波、GPU 750 MHz、编码线程避开 A55）。
@@ -55,4 +70,5 @@
   逐项数字和原因在 MaliMetal 仓库 `docs/notes.zh-CN.md` 的「帧率」「帧率（二）」两节。离 60 帧还差：触摸到第一帧的延迟（右滑 150 ms 以上，推测是 Today View 的小组件）、
   手势开头的重帧、频率固定（GPU 不调频，CPU 频率未管理）。
 - GPU 完成走轮询，没有中断；一个进程最多八个 group。
-- 网络、音频、电源管理不在当前范围。
+- Wi-Fi：数据通路是轮询的 SDIO（约 25 MHz，无 DMA、无中断），下载峰值约 34 Mbit/s；还没人在「设置」里点过 Wi-Fi；5 GHz 和 WPA3 没试。
+- 音频、电源管理不在当前范围。

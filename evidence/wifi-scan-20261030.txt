@@ -1,0 +1,53 @@
+The AP6398S (BCM4359 C0) talking to the host through the SDPCM/BCDC protocol and scanning the air (package/Evb10Wifi, evb10-wifi=3) on the RK3588 EVB10 V10.
+Command:  cd uefi-evb10 && EXTRA_KERNEL_ARGS="evb10-wifi=3" CAPTURE_SECS=100 EARLY_STOP=0 tools/xnu-probe/run-kernel.sh wifi5
+Revision: UniXNU-evb10 1efa0fc plus the station layer as it was when this ran (the code is committed as 7552f86; the run is from an earlier state of it)
+Date:     2026-10-30 18:05 (UTC+8)
+Kernel arguments: the committed defaults of board.toml plus evb10-wifi=3.
+What this shows: the firmware answers ioctls and iovars over function 2 (version, MAC address, CLM, scan version), WLC_UP is accepted, and an "escan" returns
+access points of both bands; the first scan of the run listed 35 (2.4 GHz 20, 5 GHz 15 in the 35 lines of the first list below). Names and the
+last three bytes of every address are removed here; the module's own MAC address is shown with its last three bytes masked.
+
+[  61.088] evb10: wifi: firmware: wl0: Aug 21 2023 11:05:11 version 9.87.51.11.102 (g58ed01d) FWID 01-7f347e2f 
+[  61.088] evb10: wifi: MAC address 9c:b8:b4:xx:xx:xx (0)
+[  61.088] evb10: wifi: CLM API: 15.0 Data: 9.7.7 Compiler: 1.43.5 ClmImport: 1.32.3 Creation: 2023-08-21 11:04:57 
+[  61.104] evb10: wifi: scan parameters version 1
+[  61.120] evb10: wifi: WLC_UP 0
+[  62.661] evb10: wifi: first scan: scan finished after 1540 ms: 81 records, 35 networks
+[  64.313] evb10: wifi: rescan: scan finished after 1633 ms: 65 records, 38 networks
+[  65.994] evb10: wifi: rescan: scan finished after 1660 ms: 78 records, 43 networks
+--- the first scan, every network listed (names and address tails removed):
+[  62.661] evb10: wifi:   58:41:20:xx:xx:xx 5180 MHz -70 dBm "<ssid>"
+[  62.661] evb10: wifi:   8c:ab:8e:xx:xx:xx 5180 MHz -48 dBm "<ssid>"
+[  62.661] evb10: wifi:   e2:05:a4:xx:xx:xx 2412 MHz -41 dBm "<ssid>"
+[  62.661] evb10: wifi:   42:f7:b8:xx:xx:xx 2412 MHz -26 dBm "<ssid>"
+[  62.661] evb10: wifi:   88:25:93:xx:xx:xx 2412 MHz -28 dBm "<ssid>"
+[  62.661] evb10: wifi:   a0:04:60:xx:xx:xx 2422 MHz -25 dBm "<ssid>"
+[  62.661] evb10: wifi:   a0:c5:f2:xx:xx:xx 2412 MHz -37 dBm "<ssid>"
+[  62.665] evb10: wifi:   42:f7:b8:xx:xx:xx 5220 MHz -59 dBm "<ssid>"
+[  62.665] evb10: wifi:   3c:7c:3f:xx:xx:xx 2422 MHz -40 dBm "<ssid>"
+[  62.665] evb10: wifi:   e0:b6:68:xx:xx:xx 2422 MHz -49 dBm "<ssid>"
+[  62.665] evb10: wifi:   b8:a3:86:xx:xx:xx 2432 MHz -28 dBm "<ssid>"
+[  62.665] evb10: wifi:   88:25:93:xx:xx:xx 5745 MHz -69 dBm "<ssid>"
+[  62.665] evb10: wifi:   28:80:8a:xx:xx:xx 5745 MHz -89 dBm "<ssid>"
+[  62.665] evb10: wifi:   1c:fa:68:xx:xx:xx 2437 MHz -33 dBm "<ssid>"
+[  62.665] evb10: wifi:   5e:51:4f:xx:xx:xx 2432 MHz -48 dBm "<ssid>"
+[  62.669] evb10: wifi:   34:f7:16:xx:xx:xx 5765 MHz -69 dBm "<ssid>"
+[  62.669] evb10: wifi:   a0:04:60:xx:xx:xx 5765 MHz -65 dBm "<ssid>"
+[  62.669] evb10: wifi:   34:f7:16:xx:xx:xx 2437 MHz -44 dBm "<ssid>"
+[  62.669] evb10: wifi:   64:09:80:xx:xx:xx 5785 MHz -74 dBm "<ssid>"
+[  62.669] evb10: wifi:   28:80:8a:xx:xx:xx 5785 MHz -87 dBm "<ssid>"
+[  62.669] evb10: wifi:   28:80:8a:xx:xx:xx 5785 MHz -76 dBm "<ssid>"
+[  62.669] evb10: wifi:   28:80:8a:xx:xx:xx 5785 MHz -85 dBm "<ssid>"
+[  62.672] evb10: wifi:   8c:25:05:xx:xx:xx 5805 MHz -80 dBm "<ssid>"
+[  62.673] evb10: wifi:   64:09:80:xx:xx:xx 2447 MHz -41 dBm "<ssid>"
+[  62.673] evb10: wifi:   18:f2:2c:xx:xx:xx 5805 MHz -82 dBm "<ssid>"
+[  62.673] evb10: wifi:   28:80:8a:xx:xx:xx 2452 MHz -61 dBm "<ssid>"
+[  62.673] evb10: wifi:   d0:76:e7:xx:xx:xx 2462 MHz -27 dBm "<ssid>"
+[  62.673] evb10: wifi:   cc:08:fb:xx:xx:xx 2462 MHz -49 dBm "<ssid>"
+[  62.673] evb10: wifi:   10:82:3d:xx:xx:xx 2462 MHz -40 dBm "<ssid>"
+[  62.673] evb10: wifi:   16:82:3d:xx:xx:xx 2462 MHz -40 dBm "<ssid>"
+[  62.690] evb10: wifi:   04:f9:f8:xx:xx:xx 2462 MHz -65 dBm "<ssid>"
+[  62.690] evb10: wifi:   20:4e:7f:xx:xx:xx 2462 MHz -49 dBm "<ssid>"
+[  62.690] evb10: wifi:   fa:6f:b0:xx:xx:xx 2462 MHz -60 dBm "<ssid>"
+[  62.690] evb10: wifi:   28:80:8a:xx:xx:xx 5300 MHz -87 dBm "<ssid>"
+[  62.690] evb10: wifi:   28:80:8a:xx:xx:xx 5300 MHz -87 dBm "<ssid>"
