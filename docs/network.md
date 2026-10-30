@@ -1,8 +1,8 @@
 # Wi-Fi (AP6398S) on the EVB10
 
-Status: **planned**. The module is powered and identified over SDIO, from U-Boot and from the kernel; there is no firmware
-download, network interface or Apple80211 glue yet. This page keeps what is known, what was observed on the board, and what
-comes next.
+Status: **planned**. The module is powered, identified over SDIO and its firmware is downloaded and started by the kernel
+(HT clock available, function 2 ready); there is no protocol layer (SDPCM/BCDC), network interface or Apple80211 glue yet.
+This page keeps what is known, what was observed on the board, and what comes next.
 
 ## Hardware
 
@@ -48,6 +48,37 @@ RCA 1, `MANFID 02d0:4359`, `CHIPID 17294359`, `CHIPCLKCSR 48`), 0.43 s after the
 SpringBoard as before. At kernel entry `CLKSEL_CON(172)` reads `0x0c` (GPLL, divider 3) and both SDIO gates and resets are open, so
 the driver sets the mux to the 24 MHz oscillator itself.
 
+## Checkpoint 3: the kernel downloads the firmware and the chip answers (done)
+
+With `evb10-wifi=2` the driver goes on after the identification (`evb10-wifi=1` stops there). The sequence was first run by hand
+at the U-Boot prompt (registers written with `mw.l`, FIFO words read with `md.l`), then written as kernel code:
+
+1. **Bus.** CCCR `0x07` = `0x82` (4-bit, card-detect pull-up off), the host's `CTYPE` = 1, `cclk_src_sdio` from GPLL with divider
+   field 23 (`CLKSEL_CON(172)` = `0x5c`: 1188 MHz / 24 = 49.5 MHz) and the host's `CLKDIV` = 0, which gives a card clock of about
+   24.75 MHz. Function 1's block size (registers `0x110/0x111` of function 0) is 64.
+2. **CMD53.** Polled: the words move through the host's FIFO (`0x200` answers on every word of `0x200..0xfff`). Byte mode below
+   64 bytes (registers), 64-byte blocks from 64 bytes up; the count in the argument is bytes below the block size, blocks above.
+   A byte-mode count above the block size answers R5 `OUT_OF_RANGE` and leaves the FIFO full: reset it (`CTRL` bit 1) before every
+   transfer.
+3. **Backplane.** 32 KiB windows of function 1 (`0x1000a..0x1000c` hold the window base), 32-bit access flag `0x8000` in the
+   address. The cores of this chip (read from the EROM at `0x1810c000`, `ChipCommon + 0xfc`): ChipCommon `0x18000000`, 802.11 at
+   `0x18001000` and `0x18004000`, ARM CR4 `0x18002000` (wrapper `0x18102000`), SDIO device `0x18005000`.
+4. **Passive.** CR4 reset with the halt bit (the AXI wrapper registers `IOCTL` at `+0x408`, `RESET_CTL` at `+0x800`), both 802.11
+   cores disabled (`brcmf_chip_set_passive`). The CR4's bank registers give 7 banks of 128 KB: 0xe0000 bytes
+   of RAM at `0x160000` (`brcmf_chip_tcm_ramsize`; rambase of revision 9 and later).
+5. **Download.** The firmware at the RAM base, the nvram blob (processed like `brcmf_fw_nvram`: comments and blank lines dropped,
+   `key=value\0`, a length token at the end) at the top of the RAM; both are read back and compared. The first word of the
+   firmware is the reset vector and goes to address 0.
+6. **Start.** SDIO core interrupt status cleared, CR4 released from halt, HT clock requested (`CHIPCLKCSR` bit 4), the SDIO core's
+   mailbox word set to protocol version 4, function 2 enabled (`IOEx` = 6).
+
+Observed on the board (`evidence/wifi-firmware-run-20261030.txt`): the images (673934 + 4896 bytes) are written in 90 ms and read
+back identical in 82 ms; after the release the HT clock is available in 34 ms (`CHIPCLKCSR` `0xd0`) and function 2 reports ready
+(`IORx` = 6) 232 ms after the release, which is how `brcmfmac` decides that the firmware started. The system runs on as before.
+The images are embedded in the kernel by `scripts/build-wifi-firmware.py` (a `board.toml` archive step; the generated
+`package/Evb10Wifi/wifi_fw.inc` is git-ignored) from `.cache/firmware`, which `scripts/extract-files.py` fills from the vendor tree;
+without the files the driver prints that nothing is embedded and stops after the bus switch.
+
 ## Findings from the bring-up
 
 * **The IOMUX registers are in BUS_IOC, not in the tables `pinctrl-rockchip.c` shows first.** For GPIO2_A4..B7 the function
@@ -59,6 +90,10 @@ the driver sets the mux to the 24 MHz oscillator itself.
   must not turn it off.
 * The first response read after a `mw.l` of the command register can still be the previous command's: a command takes over 100
   microseconds at 400 kHz and U-Boot's `md.l` follows within a few. The script reads RINTSTS three times before RESP0.
+* **Byte-mode CMD53 stops at the block size.** Reading 256 bytes in byte mode with function 1's block size at its default came back as
+  R5 `OUT_OF_RANGE` and a data read timeout with a stale FIFO (424 words). Set the block size (64) and use block mode.
+* The processed nvram and the firmware's own first word are all the download needs: the chip came up with the default drive and
+  sample phases of `SDIO_CON0/1` (reset values) at about 25 MHz.
 * U-Boot here has no `sleep` and no `i2c` command; the script waits between ssh round trips, and the RTC was checked with a
   GPIO bit-bang I2C built from `mw.l` macro lines.
 
@@ -72,14 +107,15 @@ Recorded as optional entries in `proprietary-files.txt` (section "AP6398S Wi-Fi"
 | `nvram_ap6398s.txt` | `AP6398S_NVRAM_V4.2_20221130`, board type `0x0812`, board revision `0x1301`; it carries a fixed default MAC address |
 | `4359_cypress_auto.clm_blob` | regulatory data (CLM); whether the C0 build wants it is not decided |
 
-`fw_bcm4359c51a2_ag.bin` in the same directory is a 4362a2 build, not for this module. Nothing loads these files yet.
+`fw_bcm4359c51a2_ag.bin` in the same directory is a 4362a2 build, not for this module. The kernel embeds the first two (checkpoint
+3); the CLM blob is not loaded: the firmware starts without it, and it is only needed once regulatory settings matter.
 
 ## What is missing
 
-1. **A real SDIO host.** `Evb10Wifi` only does CMD52 at 400 kHz, 1-bit. Still to come: 4-bit and a higher clock (the CRU divider
-   and the host's CLKDIV, the drive and sample phases in `SDIO_CON0/1` at 0xfd7c0c24/28), CMD53 with block transfers (FIFO or
-   the host's internal DMA), and the interrupt (SPI 204, a fixed number: the node must not export `interrupts`). The eMMC host
-   (`dwcmshc`, `Rk3588Emmc`) is a different controller.
+1. **A fuller SDIO host.** `Evb10Wifi` runs 4-bit at about 25 MHz with polled CMD53 through the FIFO, one-shot at start-up. Still to
+   come: the sample and drive phases in `SDIO_CON0/1` (0xfd7c0c24/28) and 50 MHz or more, the host's internal DMA for the
+   frames, and the interrupt (SPI 204, a fixed number: the node must not export `interrupts`; function 1's in-band interrupt).
+   The eMMC host (`dwcmshc`, `Rk3588Emmc`) is a different controller.
 2. **A Broadcom FullMAC component.** The catalog only has `Ath12kWifi` (Qualcomm, PCIe). The station interface of its
    `nw_abi.h` (`nw_wifi_scan/connect/tx/...`, `nw_wifi_events`) can stay; the board interface changes from PCIe BAR and MSI to
    SDIO function accesses. The reference for the protocol is Linux `brcmfmac` (`sdio.c`, `bcmsdh.c`, `chip.c`): backplane
@@ -90,5 +126,7 @@ Recorded as optional entries in `proprietary-files.txt` (section "AP6398S Wi-Fi"
 
 ## Next step
 
-Give the in-kernel host CMD53 and 4-bit, then download `fw_bcm4359c0_ag.bin` and the nvram to the chip and see it boot (the
-firmware's console and `CHIPID` through the backplane are the checks).
+Talk to the running firmware: the SDPCM frame layer on function 2 (the mailbox and the interrupt status of the SDIO core, the
+frame header with sequence and channel), then BCDC iovars and ioctls (`cur_etheraddr`, `ver`, scan) over it, as `brcmfmac` does.
+The firmware's console in RAM (the last word of the RAM points to the shared structure that holds its address) is the way to
+see why it refuses something. That is the start of the Broadcom FullMAC component of the previous section.

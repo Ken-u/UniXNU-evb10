@@ -1,0 +1,30 @@
+The AP6398S (BCM4359 C0) firmware downloaded and started by the kernel (package/Evb10Wifi, evb10-wifi=2) on the RK3588 EVB10 V10.
+Command:  cd uefi-evb10 && CAPTURE_SECS=120 EARLY_STOP=0 EXTRA_KERNEL_ARGS="evb10-wifi=2" tools/xnu-probe/run-kernel.sh wifi3
+Revision: UniXNU-evb10 32ab3cd072d1447a06f714f593792675d7328242 (kernel and payload built from this tree; board.toml carries the usual local trust-cache digest)
+Date:     2026-10-30 17:24 (UTC+8)
+Kernel arguments: the committed defaults of board.toml plus evb10-wifi=2 (in the argument line of the run: yes).
+Capture: 120 s, lines containing "panic(" or "Kernel panic": 0; the system ran on to SpringBoard and the Mali compositor as before. One run: the first attempt
+(wifi3.flake1) was the UEFI eMMC HS400 CRC error that run-kernel.sh retries by design, the kernel never started in it.
+Images: fw_bcm4359c0_ag.bin (673934 bytes, rstvec word 0xb83ef160) and nvram_ap6398s.txt (4896 bytes processed), from .cache/firmware via scripts/extract-files.py.
+What "runs" means here: the same two checks as Linux's brcmfmac (sdio.c): the chip's HT clock becomes available (CHIPCLKCSR 0xd0) and function 2 sets its
+ready bit in IORx. The firmware console in RAM was not read. The serial excerpt below is every line of the run that names the Wi-Fi driver, plus the
+kernel's first line.
+
+[  21.401] kprintf initialized
+[  22.357] evb10: wifi: CRU gate75 00000000 softrst75 00000000 sel172 0000000c before
+[  22.357] evb10: wifi: SDIO host VERID 5342270a
+[  22.776] evb10: wifi: WL_REG_ON high
+[  22.776] evb10: wifi: CLK pad high in 14 of 20 samples
+[  22.776] evb10: wifi: CMD5 OCR ffff00, 3 IO functions
+[  22.776] evb10: wifi: RCA 1 selected
+[  22.776] evb10: wifi: CCCR revision 43, capabilities 02, CIS at 10ac
+[  22.776] evb10: wifi: CIS 20 04 d0 02 59 43 21 02: MANFID 02d0:4359
+[  22.776] evb10: wifi: CHIPCLKCSR 48, ChipCommon CHIPID 17294359: chip 4359 revision 9
+[  22.776] evb10: wifi: AP6398S (BCM4359 revision 9) identified over SDIO
+[  22.776] evb10: wifi: bus at 4 bits, about 25 MHz (CRU sel172 0000005c)
+[  22.776] evb10: wifi: ARM CR4 halted (IOCTL 21 RESET_CTL 0), RAM e0000 bytes at 160000
+[  22.967] evb10: wifi: firmware 673934 bytes at 160000 and nvram 4896 bytes at 23ece0 written in 90 ms and verified in 82 ms
+[  22.967] evb10: wifi: ARM CR4 released (reset vector b83ef160, IOCTL 1 RESET_CTL 0)
+[  22.999] evb10: wifi: HT clock available after 34 ms (CHIPCLKCSR d0)
+[  23.201] evb10: wifi: function 2 ready after 232 ms from the release (IORx 06)
+[  23.201] evb10: wifi: the AP6398S firmware runs
