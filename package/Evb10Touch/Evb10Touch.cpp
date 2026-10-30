@@ -400,6 +400,7 @@ thread_call_t gCall;
 bool gInitDone;
 unsigned gLogPerSecond = 10;
 uint32_t gBeat;
+uint64_t gTickUs, gTickMaxUs;  // time spent inside tick() (the poll and the log lines), and the longest single one
 
 void arm(unsigned ms) {
   uint64_t deadline;
@@ -454,9 +455,13 @@ void init() {
   const uint32_t rate = clockRate();
   pins();
   gBus.disable();
-  printf("evb10: touch: I2C5 version %u, clock %u Hz, ", version, rate);
-  if (!gBus.setSpeed(100000, rate)) {
-    printf("cannot set 100 kHz\n");
+  // evb10-touch-khz=N (100..400, default 100): the SCL rate. A poll is a handful of bytes, and the loop busy-waits for every one of them at a
+  // priority above the UI threads, so a faster bus is less time taken from a fast core (100 kHz: ~0.55 ms per idle poll, 400 kHz: ~0.15 ms).
+  unsigned khz = 100;
+  if (PE_parse_boot_argn("evb10-touch-khz", &khz, sizeof khz) && (khz < 100 || khz > 400)) khz = 100;
+  printf("evb10: touch: I2C5 version %u, clock %u Hz, SCL %u kHz, ", version, rate, khz);
+  if (!gBus.setSpeed(khz * 1000, rate)) {
+    printf("cannot set %u kHz\n", khz);
     return;
   }
   printf("CLKDIV %08x\n", rd(gI2c, kClkDiv));
@@ -588,6 +593,7 @@ void tick(thread_call_param_t, thread_call_param_t) {
   static uint64_t logWindow;
   static unsigned logged;
   static uint32_t errors;
+  const uint64_t tickBegan = nowUs();
   int n = gKind == kGoodix ? gtPoll(contacts) : cstPoll(contacts);
   {
     Contact scripted;
@@ -628,10 +634,17 @@ void tick(thread_call_param_t, thread_call_param_t) {
       previousCount = static_cast<unsigned>(n);
     }
   }
-  if (++gBeat % 1000 == 0)
+  const uint64_t spent = nowUs() - tickBegan;
+  gTickUs += spent;
+  if (spent > gTickMaxUs) gTickMaxUs = spent;
+  if (++gBeat % 1000 == 0) {
     printf("evb10: touch: t+%us frames %u with contact %u errors %u last raw (%u,%u) status reads %u last 0x%02x INT %d, HID reports %u\n", gBeat / 100,
            evb10_touch_stats[0], evb10_touch_stats[1], evb10_touch_stats[2], evb10_touch_stats[3], evb10_touch_stats[4], gStatusSeen,
            gLastStatus, gpioGet(kPinInt), native_touch_hid_reports);
+    printf("evb10: touch: tick %llu us on average, %llu us at most (%u ticks)\n", static_cast<unsigned long long>(gTickUs / gBeat),
+           static_cast<unsigned long long>(gTickMaxUs), gBeat);
+    gTickMaxUs = 0;
+  }
   arm(10);
 }
 
