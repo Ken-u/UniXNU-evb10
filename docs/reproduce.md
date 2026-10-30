@@ -37,7 +37,9 @@ ws/
   node would get `interrupt-parent` but XNU resolves parents through `AAPL,phandle`, and IOKit start-up takes a data abort.
 * Submodule pointers (`package/Mali`, `package/Rk3588Emmc`) must be staged (`git add package/Mali ...`) or `unixnu`
   resets them to the index commit.
-* `.env` of `uefi-evb10` needs `ADB`, `FB`, `MTOOLS_BIN` and the host/board addresses (see `.env.example`).
+* `.env` of `uefi-evb10` needs `ADB`, `FB`, `MTOOLS_BIN` and the host/board addresses (see `.env.example`). Its run scripts
+  also use the board tools of the SoC repo (`UniXNU-rk3588-common/tools/board`: serial capture, U-Boot console, USB
+  helpers, reset wrapper); the checkout next to `uefi-evb10` is found automatically, `RK3588_COMMON` overrides it.
 
 ## Frame rate: the default boot arguments, measuring, and a 1 GHz GPU
 
