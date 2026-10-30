@@ -75,7 +75,15 @@ trust_cache_sha256 = [
 #   input      evb10-touch*, evb10-hid*, sheng-touch-hid.
 #   gpu        mali=8 starts the Mali-G610 firmware and registers the service; mali-metal=1 registers the accelerator for
 #              Metal discovery; evb10-gpu-addon=1 makes the payload tool carry the Metal plug-in.
-#   debugging  evb10-ps (process table every N seconds), evb10-bt* (user stacks of the named processes).
+#   frame rate evb10-vop-direct=1 scans out the render server's buffer without a copy and evb10-vop-fence=1 waits for its GPU job before the flip;
+#              mali-pll=1 mali-div=1 runs the GPU at 750 MHz (the 0.75 V rail of the firmware's default build; 1 GHz is mali-pll=3 mali-div=0
+#              mali-npll=1000 on a firmware built with GPU_RAIL_UV=850000, docs/reproduce.md); mali-ycbcr-filter=device uses the device's own linear
+#              filter for converted YCbCr textures; mali-aflush=1 flushes a command buffer's surfaces beside its replay; cpumask=31 runs the four
+#              Cortex-A76 cores (logical 0..3, the device tree lists them first) and the boot core; mali-epri=50 raises the encoding thread of the
+#              render server to priority 50 and sched-slowcpus=240 keeps the interactive threads off the Cortex-A55 cores while a fast core is free.
+#   debugging  not in the list below, add them with EXTRA_KERNEL_ARGS (the command line is limited to 1000 bytes): evb10-ps=N (process table every
+#              N seconds), evb10-bt=NAME (evb10-bt2..4; user stacks of the named processes at each table), mali-timeline=1, mali-profile=1,
+#              evb10-touch-demo=SECS (scripted swipes), evb10-touch-khz=400 (touch bus clock).
 kernel_args = [
   "-v",
   "serial=3",
@@ -89,13 +97,16 @@ kernel_args = [
   "emmc-data-mount=1",
   "emmc-data-size=2048",
   "emmc-data-persist=1",
-  "evb10-ps=10",
   "evb10-vop=2",
   "evb10-vop-qos=0",
   "evb10-vop-es2=1",
+  "evb10-vop-direct=1",
+  "evb10-vop-fence=1",
   "sheng-smp=1",
   "armcpu-self-ipi=1",
   "armcpu-mmio-sgi=0",
+  "cpumask=31",
+  "sched-slowcpus=240",
   "wdt-kick=1800",
   "offline-mobile-graphics-load=1",
   "offline-legacy-register=1",
@@ -115,15 +126,16 @@ kernel_args = [
   "evb10-touch=1",
   "mali=8",
   "mali-metal=1",
+  "mali-pll=1",
+  "mali-div=1",
+  "mali-ycbcr-filter=device",
+  "mali-aflush=1",
+  "mali-epri=50",
   "evb10-gpu-addon=1",
   "evb10-touch-xmax=720",
   "evb10-touch-ymax=1280",
   "evb10-hid-input=1",
   "sheng-touch-hid=1",
-  "evb10-bt=SpringBoard",
-  "evb10-bt2=chronod",
-  "evb10-bt3=liveactivitiesd",
-  "evb10-bt4=backboardd",
 ]
 
 [payload.adt]
