@@ -39,6 +39,38 @@ ws/
   resets them to the index commit.
 * `.env` of `uefi-evb10` needs `ADB`, `FB`, `MTOOLS_BIN` and the host/board addresses (see `.env.example`).
 
+## Frame rate: the default boot arguments, measuring, and a 1 GHz GPU
+
+`board.toml` carries the frame-rate boot arguments (the comment above `kernel_args` says what each one does): zero-copy scanout with the GPU job as
+the fence, the GPU at 750 MHz (`mali-pll=1 mali-div=1`: CPLL 1500 MHz divided by two, at the 0.75 V the firmware sets), the device's own YCbCr filter,
+the asynchronous surface flush, `cpumask=31` (the four Cortex-A76 cores, which the SoC device tree lists first, and the boot core), and the encoding
+thread's priority with the slow-core avoidance (`mali-epri=50`, `sched-slowcpus=240`). `evb10-ps` and the `evb10-bt*` names are not in the list: the
+process table costs the serial line about 3 MB a run and the frame rate its measurements. `unixnu` refuses a kernel command line longer than
+**1000 bytes** (the defaults are 884), so extra arguments have to be few; arguments of the same name replace the default.
+
+Measure a run (the board runs the scripted swipes of `evb10-touch-demo` and the plug-in records the command-buffer timeline):
+
+```
+cd uefi-evb10
+EXTRA_KERNEL_ARGS="evb10-touch-demo=120 mali-timeline=1" CAPTURE_SECS=235 EARLY_STOP=0 \
+  setsid nohup tools/xnu-probe/run-kernel.sh TAG > runs/TAG.driver.log 2>&1 </dev/null &
+python3 tools/xnu-probe/frame_phases.py TAG            # frames per second per gesture, finger down and settling
+python3 tools/xnu-probe/cb_table.py TAG --latency      # commit-to-completion percentiles, replays on a slow core, touch-to-first-frame
+```
+
+**GPU at 1 GHz.** The clock needs the GPU rail at 0.85 V (Rockchip's operating points: 0.75 V up to 800 MHz, 0.80 V for 900 MHz, 0.85 V for 1 GHz), and
+the driver does not scale the voltage, so the two have to be changed together:
+
+1. Build the firmware with the rail in microvolts: `cd uefi-evb10 && env -i HOME=$HOME USER=$USER PATH=/usr/local/bin:/usr/bin:/bin GPU_RAIL_UV=850000 ./build.sh`,
+   then `tools/stub/build.sh` (`run-kernel.sh` boots a probe image that carries the firmware volume). A firmware that is flashed into the board keeps its own
+   rail: build it the same way and flash it before you run the GPU at 1 GHz from flash.
+2. Replace `"mali-pll=1", "mali-div=1"` in the `board.toml` list by `"mali-pll=3", "mali-div=0", "mali-npll=1000"`, or try it for one run with
+   `EXTRA_KERNEL_ARGS="mali-pll=3 mali-div=0 mali-npll=1000" tools/xnu-probe/run-kernel.sh TAG`. `mali-pll=3` is NPLL, which the firmware leaves at 850 MHz;
+   `mali-npll=MHz` (400 to 1100) moves it before the GPU is switched onto it.
+3. The console shows `mali: mali-npll=1000: m 425 -> 500, npll now 1000000 kHz (locked 1, ...)`, and the GPU cycle-counter probe reads 1000 MHz.
+
+1 GHz on the 0.75 V rail is outside the vendor's operating points and was not tried. Numbers for both settings are in the porting record (area `gpu`) and in the MaliMetal notes.
+
 ## Without root (`scripts/host/`)
 
 `env.sh` (set `TOOLS` to a prebuilt UniXNU toolchain prefix, `WS` to the workspace) and `in-ns.sh` (user namespace that
