@@ -1,0 +1,18 @@
+AP6398S (BCM4359) identified over SDIO by the kernel (package/Evb10Wifi) on the RK3588 EVB10 V10.
+Command:  cd uefi-evb10 && CAPTURE_SECS=120 EARLY_STOP=0 EXTRA_KERNEL_ARGS="evb10-wifi=1" tools/xnu-probe/run-kernel.sh wifi1
+Revision: UniXNU-evb10 1396eba965fe210555e3c6e24b4dd720eaf15e65 (kernel and payload built from this tree; board.toml carries the usual local trust-cache digest)
+Date:     2026-10-30 16:15 (UTC+8)
+Kernel arguments: the committed defaults of board.toml plus evb10-wifi=1 (in the argument line of the run: yes).
+Capture: 120 s, lines containing "panic": 0. The serial excerpt below is every line of the run that names the Wi-Fi driver, plus the kernel's first line.
+
+[  67.800] kprintf initialized
+[  68.736] evb10: wifi: CRU gate75 00000000 softrst75 00000000 sel172 0000000c before
+[  68.736] evb10: wifi: SDIO host VERID 5342270a
+[  69.166] evb10: wifi: WL_REG_ON high
+[  69.166] evb10: wifi: CLK pad high in 10 of 20 samples
+[  69.166] evb10: wifi: CMD5 OCR ffff00, 3 IO functions
+[  69.166] evb10: wifi: RCA 1 selected
+[  69.166] evb10: wifi: CCCR revision 43, capabilities 02, CIS at 10ac
+[  69.166] evb10: wifi: CIS 20 04 d0 02 59 43 21 02: MANFID 02d0:4359
+[  69.166] evb10: wifi: CHIPCLKCSR 48, ChipCommon CHIPID 17294359: chip 4359 revision 9
+[  69.166] evb10: wifi: AP6398S (BCM4359 revision 9) identified over SDIO
