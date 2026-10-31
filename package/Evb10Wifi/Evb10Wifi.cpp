@@ -29,6 +29,9 @@
 //            evb10-wifi=4   as 3, then join the network of .cache/firmware/join.txt (WPA2-PSK by the firmware supplicant) and run a self-test over the
 //                           air: DHCP, ARP, ping of the router and of the DNS server
 //            evb10-wifi=5   as 4 without the self-test: the station interface below serves the board's network code
+//            evb10-wifi-join=0   with 4 or 5: do not join the file's network at boot (the join then comes from the OS, from Settings)
+//            evb10-wifi-join=2   as 0, and the scans list only the file's network (a test aid: a scripted touch finds it in a fixed row of Settings)
+//            evb10-wband=N   with 3 to 5: lock the radio to 5 GHz (1) or 2.4 GHz (2); no argument leaves both bands
 #include <IOKit/IOLib.h>
 #include <libkern/c++/OSMetaClass.h>
 #include <kern/thread_call.h>
@@ -814,7 +817,7 @@ bool service() {
 
 // ---------------------------------------------------------------------------------------------------------------- BCDC: ioctls and iovars
 
-constexpr uint32_t kCmdUp = 2, kCmdSetInfra = 20, kCmdSetAp = 118, kCmdSetScanChannelTime = 185, kCmdSetScanUnassocTime = 187, kCmdGetVar = 262, kCmdSetVar = 263;
+constexpr uint32_t kCmdUp = 2, kCmdSetInfra = 20, kCmdSetBand = 142, kCmdSetAp = 118, kCmdSetScanChannelTime = 185, kCmdSetScanUnassocTime = 187, kCmdGetVar = 262, kCmdSetVar = 263;
 constexpr int kErrTimeout = -1001, kErrSend = -1002, kErrSize = -1003;
 
 alignas(8) uint8_t gCtlOut[kMaxFrame];
@@ -946,6 +949,9 @@ struct Bss {
 };
 Bss gBss[kMaxBss];
 unsigned gBssCount;
+// evb10-wifi-join=2 (a test aid): only the join file's network is listed, so that a scripted touch finds it in a fixed row of the Settings list.
+uint8_t gOnlySsid[32];
+unsigned gOnlySsidLen;
 IOLock *gLock;
 
 uint64_t nowMs() { return nowUs() / 1000; }
@@ -955,6 +961,7 @@ void addBss(const uint8_t *rec, unsigned avail) {
   BssInfoLe b;
   memcpy(&b, rec, sizeof b);
   if (b.length > avail || b.ssidLen > 32) return;
+  if (gOnlySsidLen && (b.ssidLen != gOnlySsidLen || memcmp(b.ssid, gOnlySsid, b.ssidLen))) return;
   nw_bss_info n;
   memset(&n, 0, sizeof n);
   memcpy(n.bssid, b.bssid, 6);
@@ -1156,6 +1163,11 @@ bool dongleInit() {
   if (r) printf("evb10: wifi: bus:txglom %d\n", r);
   r = iovarSetInt("mpc", 0);
   if (r) printf("evb10: wifi: mpc %d\n", r);
+  // The firmware passes only the multicast groups it was told about (brcmf_netdev_set_multicast_list); the network stack's IPv6 (neighbour
+  // discovery, router advertisements) lives on them, so until it is told the chip drops all of it. The interface's multicast list is not
+  // forwarded (SIOCADDMULTI is a no-op), so ask for every group.
+  r = iovarSetInt("allmulti", 1);
+  if (r) printf("evb10: wifi: allmulti %d\n", r);
   uint8_t mask[18] = {};
   r = iovarGet("event_msgs", mask, sizeof mask);
   if (r) printf("evb10: wifi: event_msgs get %d\n", r);
@@ -1171,6 +1183,14 @@ bool dongleInit() {
   r = cmdSetInt(kCmdSetInfra, 1);
   const int ap = cmdSetInt(kCmdSetAp, 0);
   printf("evb10: wifi: infrastructure mode %d, not an access point %d\n", r, ap);
+  // evb10-wband=N locks the radio to one band (WLC_SET_BAND: 1 is 5 GHz, 2 is 2.4 GHz; 0 or no argument leaves both). On this board a join to the
+  // 5 GHz access point of the test network ended in an association nobody acknowledged and a roam to it stopped the traffic (docs/network.md), so 2
+  // is the way to a link that carries data until 5 GHz is understood; 1 is how 5 GHz is tried on its own.
+  unsigned band = 0;
+  if (PE_parse_boot_argn("evb10-wband", &band, sizeof band) && band >= 1 && band <= 2) {
+    r = cmdSetInt(kCmdSetBand, static_cast<int>(band));
+    printf("evb10: wifi: band locked to %s (%d)\n", band == 1 ? "5 GHz" : "2.4 GHz", r);
+  }
   // WLC_UP: until the radio is brought up every scan or join is refused with BCME_NOTUP (-4).
   r = dcmd(kCmdUp, true, nullptr, 0, nullptr, 0);
   printf("evb10: wifi: WLC_UP %d\n", r);
@@ -1872,7 +1892,20 @@ void stationMain() {
   uint8_t ssid[32];
   char pass[65];
   unsigned ssidLen = 0, passLen = 0;
-  const bool haveJoin = gLevel >= 4 && joinFile(ssid, &ssidLen, pass, &passLen);
+  // evb10-wifi-join=0: leave the join file alone, so that the network is joined from the OS (Settings) and not at boot
+  unsigned useFile = 1;
+  PE_parse_boot_argn("evb10-wifi-join", &useFile, sizeof useFile);
+  const bool haveJoin = gLevel >= 4 && useFile == 1 && joinFile(ssid, &ssidLen, pass, &passLen);
+  if (useFile == 2) {
+    uint8_t onlySsid[32];
+    char onlyPass[65];
+    unsigned onlyLen = 0, onlyPassLen = 0;
+    if (joinFile(onlySsid, &onlyLen, onlyPass, &onlyPassLen)) {
+      memcpy(gOnlySsid, onlySsid, sizeof gOnlySsid);
+      gOnlySsidLen = onlyLen;
+    }
+    memset(onlyPass, 0, sizeof onlyPass);
+  }
   uint64_t lastAlive = nowMs(), lastTry = 0;
   unsigned tries = 0;
   gSelfTest = gLevel == 4;

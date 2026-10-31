@@ -9,6 +9,7 @@
 //
 // Layouts below are those the framework reads and writes; where a field's meaning is not known it is left zero. Every request is written
 // to the log (type, direction, length) and a request that is not handled is refused, so which ones the framework needs shows in the log.
+#include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOService.h>
@@ -93,10 +94,18 @@ lck_mtx_t *gLock;
 bool gPower = true;
 bool gKeyed;   // the last join used a passphrase
 uint32_t gRxFrames, gRxErrors; int gRxLastError;
+// The packet filter's tap: when a listener opens /dev/bpf on the interface the stack hands the driver a function (and a mode: input, output,
+// or both) to call with every frame, Ethernet header included; an Ethernet driver does this for its frames in both directions. The address
+// configuration's ARP monitor reads the router's replies through it (the DHCP client does not: it has a socket), and without a tap its
+// replies never arrive and it keeps asking for a minute, with the interface "busy" and the Settings row still on its spinner.
+volatile uint32_t gBpfMode; bpf_packet_func volatile gBpfTap;
+void log(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+errno_t if_set_bpf_tap(ifnet_t, bpf_tap_mode mode, bpf_packet_func callback) { gBpfTap = mode ? callback : nullptr; gBpfMode = mode; static unsigned n; if (n++ < 6) log(6, "wifi-net: packet filter tap mode %u", mode); return 0; }
 uint32_t gRxNoBuffer, gRxChains, gRxLongest;   // frames dropped for want of a buffer, frames that took a chain, the longest frame
 int gAssocResult = kAssocOk;
 unsigned gScanCursor, gScanning;
 uint32_t gLogged[256 / 32];
+unsigned gTrace;   // requests and events still to be logged after a join or a power change: what the wireless daemon does around them
 
 void log(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void log(int level, const char *fmt, ...) {
@@ -107,6 +116,7 @@ void log(int level, const char *fmt, ...) {
 
 // ---- events to the framework: class IEEE 802.11 (6), subclass 1, data starting with the interface name ----
 void post_event(uint32_t code, const void *payload, size_t length) {
+  if (gTrace) log(6, "wifi-net: event %u posted (%u bytes)", code, static_cast<unsigned>(length));
   uint8_t data[128]; if (length > sizeof data - 16) length = sizeof data - 16;
   memset(data, 0, 16); snprintf(reinterpret_cast<char *>(data), 16, "en0"); if (length) memcpy(data + 16, payload, length);
   struct kev_msg msg; memset(&msg, 0, sizeof msg);
@@ -159,7 +169,11 @@ void note_frame(const uint8_t *e, size_t n, bool out) {
     k.arp++; static unsigned shown[2];
     if (n >= 42 && shown[out]++ < 12) log(6, "wifi-net: arp %s op %u %u.%u.%u.%u asks %u.%u.%u.%u", dir, e[21], e[28], e[29], e[30], e[31], e[38], e[39], e[40], e[41]);
     return; }
-  if (type == 0x86dd) { k.ip6++; return; }
+  if (type == 0x86dd) {
+    k.ip6++;
+    // ICMPv6 (next header 58) is neighbour discovery: 133 router solicitation, 134 router advertisement, 135/136 neighbour solicitation/advertisement
+    static unsigned shown[2]; if (n >= 55 && e[20] == 58 && shown[out]++ < 16) log(6, "wifi-net: ip6 %s icmp6 type %u (hop limit %u)", dir, e[54], e[21]);
+    return; }
   if (type != 0x0800 || n < 34) { k.other++; return; }
   k.ip4++; const uint8_t *ip = e + 14; const unsigned ihl = (ip[0] & 15) * 4;
   if (ip[9] == 1) k.icmp++;
@@ -214,6 +228,7 @@ void on_rx(const uint8_t *eth, size_t length) {
   }
   if (done != length) { gRxNoBuffer++; mbuf_freem(m); return; }
   mbuf_pkthdr_setlen(m, length); mbuf_pkthdr_setrcvif(m, gIf);
+  { bpf_packet_func tap = gBpfTap; if (tap && (gBpfMode & BPF_MODE_INPUT)) tap(gIf, m); }   // the whole frame, before the header is set apart
   mbuf_pkthdr_setheader(m, mbuf_data(m)); mbuf_adj(m, 14);   // the stack wants the Ethernet header apart from the payload
   struct ifnet_stat_increment_param inc; memset(&inc, 0, sizeof inc); inc.packets_in = 1; inc.bytes_in = static_cast<uint32_t>(length);
   const errno_t e = ifnet_input(gIf, m, &inc);
@@ -227,6 +242,7 @@ errno_t if_output(ifnet_t, mbuf_t m) {
   if (length >= 14 && length <= 2000) {
     uint8_t frame[2000]; mbuf_copydata(m, 0, length, frame);
     note_frame(frame, length, true);
+    { bpf_packet_func tap = gBpfTap; if (tap && (gBpfMode & BPF_MODE_OUTPUT)) tap(gIf, m); }
     // A full queue means the chip is busy with the receive side (a bulk download): wait a little, as a driver with a hardware ring would,
     // instead of dropping the acknowledgements that keep the download going. The count of what still had to be dropped is in the traffic line.
     int dropped = nw_wifi_tx(frame, length);
@@ -295,7 +311,7 @@ int apple80211(bool set, apple80211req &rq) {
   uint32_t *w = reinterpret_cast<uint32_t *>(out.raw);
   if (set) {
     switch (type) {
-    case kPower: { uint32_t in[6]; if (copy_in(rq, in, sizeof in)) return EFAULT; gPower = in[2] != 0; log(6, "wifi-net: power set %u", in[2]); if (!gPower) nw_wifi_disconnect(); post_event(kEvPowerChanged, nullptr, 0); return 0; }
+    case kPower: { uint32_t in[6]; if (copy_in(rq, in, sizeof in)) return EFAULT; gPower = in[2] != 0; gTrace = 60; log(6, "wifi-net: power set %u", in[2]); if (!gPower) nw_wifi_disconnect(); post_event(kEvPowerChanged, nullptr, 0); return 0; }
     case kScanReq: case kScanReqMultiple: {
       uint8_t buf[0x80]; if (copy_in(rq, buf, sizeof buf)) return EFAULT;
       uint32_t ssidLength; memcpy(&ssidLength, buf + 16, 4); const uint8_t *ssid = buf + 20;
@@ -314,7 +330,7 @@ int apple80211(bool set, apple80211req &rq) {
       // cipher 6: the daemon already derived the pairwise master key (32 bytes); the module takes it as 64 hex digits
       unsigned keyLength = a.key_length;
       if (hasKey && a.key_cipher == 6 && a.key_length == 32) { static const char hex[] = "0123456789abcdef"; for (int i = 0; i < 32; i++) { pass[2 * i] = hex[a.key[i] >> 4]; pass[2 * i + 1] = hex[a.key[i] & 15]; } keyLength = 64; }
-      gAssocResult = kAssocFailed;
+      gAssocResult = kAssocFailed; gTrace = 240;
       log(6, "wifi-net: join: ssid length %u, bssid given %d, key length %u cipher %u", a.ssid_length, hasBssid, a.key_length, a.key_cipher);
       gKeyed = hasKey; int r = nw_wifi_connect(a.ssid, a.ssid_length, hasBssid ? a.bssid : nullptr, hasKey ? pass : nullptr, hasKey ? keyLength : 0);
       memset(pass, 0, sizeof pass); memset(&a, 0, sizeof a);
@@ -325,11 +341,14 @@ int apple80211(bool set, apple80211req &rq) {
     // effect is what a driver with nothing to configure does; refusing makes the daemon repeat them and log errors.
     case kProperty: {
       static int seen; uint8_t buf[320];
-      if (seen < 3 && rq.req_data && ++seen) {
+      if (seen < 150 && rq.req_data) {
+        ++seen;
         memset(buf, 0, sizeof buf); if (copyin(rq.req_data, buf, rq.req_len < sizeof buf - 1 ? rq.req_len : sizeof buf - 1)) return 0;
-        for (unsigned i = 0; i < sizeof buf; i++) if (buf[i] < 32 || buf[i] > 126) buf[i] = '.';
+        for (unsigned i = 0; i < sizeof buf; i++) if (buf[i] < 32 || buf[i] > 126) buf[i] = ' ';
         buf[sizeof buf - 1] = 0;
-        log(6, "wifi-net: property list %.150s", reinterpret_cast<char *>(buf + 8)); log(6, "wifi-net: property list ...%.150s", reinterpret_cast<char *>(buf + 158)); }
+        // the document's own text starts at "<dict>"; the long header before it is the same every time
+        const char *d = strnstr(reinterpret_cast<char *>(buf + 8), "<dict>", sizeof buf - 8);
+        log(6, "wifi-net: property list %.200s", d ? d : reinterpret_cast<char *>(buf + 8)); }
       return 0; }
     case kFlagA: case kFlagB: return 0;
     default: return EOPNOTSUPP;
@@ -391,7 +410,7 @@ errno_t if_ioctl(ifnet_t, unsigned long cmd, void *data) {
     // every request with its answer, for the first few hundred; then a type's first one only
     static unsigned shown; const int type = rq->req_type; const bool first = type >= 0 && type < 256 && !(gLogged[type / 32] & (1u << (type % 32)));
     if (type >= 0 && type < 256) gLogged[type / 32] |= 1u << (type % 32);
-    if (shown < 300 || first) { ++shown; log(6, "wifi-net: request %u: type %d %s len %u val %d -> %d (len %u val %d)", shown, type, cmd == SIOCSA80211 ? "set" : "get", len, val, e, rq->req_len, rq->req_val); }
+    if (shown < 300 || first || gTrace) { if (gTrace && shown >= 300) --gTrace; ++shown; log(6, "wifi-net: request %u: type %d %s len %u val %d -> %d (len %u val %d)", shown, type, cmd == SIOCSA80211 ? "set" : "get", len, val, e, rq->req_len, rq->req_val); }
     // what a refused set carries, to see what the framework wants: the first bytes of the first two of each type
     if (e == EOPNOTSUPP && cmd == SIOCSA80211 && type >= 0 && type < 512 && rq->req_data && len) {
       static uint8_t dumped[512]; if (dumped[type] < 2) { dumped[type]++; uint8_t head[40]; memset(head, 0, sizeof head);
@@ -480,6 +499,13 @@ void publish_registry(const char *ifname) {
   IO80211Interface *wlan = OSTypeAlloc(IO80211Interface);
   if (!platform || !controller || !wlan || !controller->init() || !wlan->init()) { OSSafeReleaseNULL(controller); OSSafeReleaseNULL(wlan); log(3, "wifi-net: registry objects not made"); return; }
   if (OSData *mac = OSData::withBytes(gMac, 6)) { controller->setProperty("IOMACAddress", mac); mac->release(); }
+  // MobileGestalt in a virtual machine (vmm-present, which board.toml sets for watchdogd) answers its "wifi" capability, and so Settings shows the
+  // Wi-Fi row, only if /chosen has the Wi-Fi address: the boot loader's property mac-address-wifi0. Without it the answer is a made-up address of
+  // zeros and the capability is false. The board has no boot loader that reads the module, so the driver sets the property once it knows the address.
+  if (IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane)) {
+    if (OSData *mac = OSData::withBytes(gMac, 6)) { chosen->setProperty("mac-address-wifi0", mac); mac->release(); }
+    chosen->release();
+  }
   controller->setProperty("IOBuiltin", true);
   controller = static_cast<IO80211Controller *>(publish(controller, platform, "Evb10WLANController"));
   if (!controller) { wlan->release(); log(3, "wifi-net: the controller did not start"); return; }
@@ -552,7 +578,7 @@ extern "C" void evb10_wifi_net_start(const uint8_t mac[6]) {
   struct ifnet_init_eparams p; memset(&p, 0, sizeof p);
   p.ver = IFNET_INIT_CURRENT_VERSION; p.len = sizeof p; p.flags = IFNET_INIT_LEGACY | IFNET_INIT_NX_NOAUTO; p.name = "en"; p.unit = 0; p.family = IFNET_FAMILY_ETHERNET; p.subfamily = IFNET_SUBFAMILY_WIFI; p.type = IFT_ETHER;
   p.output = if_output; p.demux = ether_demux; p.add_proto = ether_add_proto; p.del_proto = ether_del_proto; p.check_multi = ether_check_multi; p.framer = ether_frameout;
-  p.ioctl = if_ioctl; p.event = if_event_stub; static const uint8_t bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }; p.broadcast_addr = bcast; p.broadcast_len = 6;
+  p.ioctl = if_ioctl; p.event = if_event_stub; p.set_bpf_tap = if_set_bpf_tap; static const uint8_t bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }; p.broadcast_addr = bcast; p.broadcast_len = 6;
   // Without NX_NOAUTO the stack puts a compatibility nexus in front of a Wi-Fi "en" interface, and its input no longer goes through the
   // interface's own input thread.
   ifnet_t ifp = nullptr; errno_t e = ifnet_allocate_extended(&p, &ifp);
