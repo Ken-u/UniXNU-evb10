@@ -40,6 +40,9 @@ volatile uint32_t native_touch_hid_reports;
 volatile int native_touch_xs[12], native_touch_ys[12], native_touch_ids[12];
 // Frames read, frames with a contact, bus errors, last raw X / Y, and the controller's kind (0 none, 1 Goodix, 2 Hynitron).
 volatile uint32_t evb10_touch_stats[6];
+// What the event driver of package/Evb10Hid saw: [0] installed, [1] contacts begun, [2] of them at an edge, [3] skipped events; and the multi-finger counts.
+extern volatile uint32_t native_touch_edge_stats[4];
+extern volatile uint32_t native_touch_hid_multi[3];
 }
 
 namespace {
@@ -703,6 +706,8 @@ void tick(thread_call_param_t, thread_call_param_t) {
     printf("evb10: touch: t+%us frames %u with contact %u errors %u last raw (%u,%u) status reads %u last 0x%02x INT %d, HID reports %u\n", gBeat / 100,
            evb10_touch_stats[0], evb10_touch_stats[1], evb10_touch_stats[2], evb10_touch_stats[3], evb10_touch_stats[4], gStatusSeen,
            gLastStatus, gpioGet(kPinInt), native_touch_hid_reports);
+    printf("evb10: touch: event driver: wrapper %u, contacts begun %u (at an edge %u), skipped events %u, reports with 2+ fingers %u\n", native_touch_edge_stats[0],
+           native_touch_edge_stats[1], native_touch_edge_stats[2], native_touch_edge_stats[3], native_touch_hid_multi[0]);
     printf("evb10: touch: tick %llu us on average, %llu us at most (%u ticks)\n", static_cast<unsigned long long>(gTickUs / gBeat),
            static_cast<unsigned long long>(gTickMaxUs), gBeat);
     gTickMaxUs = 0;
