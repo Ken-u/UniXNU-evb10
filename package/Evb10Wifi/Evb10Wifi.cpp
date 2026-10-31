@@ -31,7 +31,6 @@
 //            evb10-wifi=5   as 4 without the self-test: the station interface below serves the board's network code
 //            evb10-wifi-join=0   with 4 or 5: do not join the file's network at boot (the join then comes from the OS, from Settings)
 //            evb10-wifi-join=2   as 0, and the scans list only the file's network (a test aid: a scripted touch finds it in a fixed row of Settings)
-//            evb10-wband=N   with 3 to 5: lock the radio to 5 GHz (1) or 2.4 GHz (2); no argument leaves both bands
 #include <IOKit/IOLib.h>
 #include <libkern/c++/OSMetaClass.h>
 #include <kern/thread_call.h>
@@ -817,7 +816,7 @@ bool service() {
 
 // ---------------------------------------------------------------------------------------------------------------- BCDC: ioctls and iovars
 
-constexpr uint32_t kCmdUp = 2, kCmdSetInfra = 20, kCmdSetBand = 142, kCmdSetAp = 118, kCmdSetScanChannelTime = 185, kCmdSetScanUnassocTime = 187, kCmdGetVar = 262, kCmdSetVar = 263;
+constexpr uint32_t kCmdUp = 2, kCmdSetInfra = 20, kCmdSetAp = 118, kCmdSetScanChannelTime = 185, kCmdSetScanUnassocTime = 187, kCmdGetVar = 262, kCmdSetVar = 263;
 constexpr int kErrTimeout = -1001, kErrSend = -1002, kErrSize = -1003;
 
 alignas(8) uint8_t gCtlOut[kMaxFrame];
@@ -1183,14 +1182,6 @@ bool dongleInit() {
   r = cmdSetInt(kCmdSetInfra, 1);
   const int ap = cmdSetInt(kCmdSetAp, 0);
   printf("evb10: wifi: infrastructure mode %d, not an access point %d\n", r, ap);
-  // evb10-wband=N locks the radio to one band (WLC_SET_BAND: 1 is 5 GHz, 2 is 2.4 GHz; 0 or no argument leaves both). On this board a join to the
-  // 5 GHz access point of the test network ended in an association nobody acknowledged and a roam to it stopped the traffic (docs/network.md), so 2
-  // is the way to a link that carries data until 5 GHz is understood; 1 is how 5 GHz is tried on its own.
-  unsigned band = 0;
-  if (PE_parse_boot_argn("evb10-wband", &band, sizeof band) && band >= 1 && band <= 2) {
-    r = cmdSetInt(kCmdSetBand, static_cast<int>(band));
-    printf("evb10: wifi: band locked to %s (%d)\n", band == 1 ? "5 GHz" : "2.4 GHz", r);
-  }
   // WLC_UP: until the radio is brought up every scan or join is refused with BCME_NOTUP (-4).
   r = dcmd(kCmdUp, true, nullptr, 0, nullptr, 0);
   printf("evb10: wifi: WLC_UP %d\n", r);
