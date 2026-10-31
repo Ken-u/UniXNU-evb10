@@ -16,6 +16,9 @@
 #include <arm/cpu_data_internal.h>
 #endif
 #include <vm/vm_shared_region.h>
+#include <vm/vm_object.h>
+#include <vm/vm_page.h>
+#include <vm/vm_protos.h>
 extern int printf(const char *, ...) __attribute__((format(printf, 1, 2)));
 extern int machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nframes, uint32_t *thread_trace_flags);
 extern struct arm_saved_state *get_user_regs(thread_t thread);
@@ -115,13 +118,64 @@ evb10_kbt_wanted(void)
 	return kbt == 1;
 }
 
+/* evb10-thr=N: threads shown per process (default EVB10_SAMPLE_THREADS): who holds a lock or a paging reference is often the thread that is not among the first eight. */
+static int
+evb10_thr_limit(void)
+{
+	static int thr = -1;
+
+	if (thr < 0) {
+		uint32_t v = 0;
+
+		(void) PE_parse_boot_argn("evb10-thr", &v, sizeof(v));
+		thr = v ? (int)v : EVB10_SAMPLE_THREADS;
+	}
+	return thr;
+}
+
+/*
+ * A thread that waits in vm_object_destroy() (a file's last mapping went away and its vnode is reclaimed) waits for the object's paging
+ * activity to end: paging_in_progress (page-in / page-out I/O) and activity_in_progress (UPLs: whoever wired pages of it, a GPU or DMA
+ * buffer object among them). The wait event is the object plus VM_OBJECT_EVENT_PAGING_IN_PROGRESS. Says which of the two it is, and which
+ * pages are wired or in transit. Reads without the object's lock (the waiter gave it up), so a diagnostic only.
+ */
+static void
+evb10_vm_object_report(vm_object_t o)
+{
+	vm_page_t m;
+	unsigned pages = 0, wired = 0, busy = 0, laundry = 0, cleaning = 0, absent = 0, dirty = 0, shown = 0;
+
+	printf("evb10: vmobj %p refs %d paging %u activity %u resident %u wired %u | internal %d pager_ready %d named %d alive %d terminating %d "
+	    "pager %p\n", o, o->ref_count, (unsigned)o->paging_in_progress, o->activity_in_progress, o->resident_page_count, o->wired_page_count,
+	    (int)o->internal, (int)o->pager_ready, (int)o->named, (int)o->alive, (int)o->terminating, o->pager);
+	vm_page_queue_iterate(&o->memq, m, vmp_listq) {
+		if (++pages > 4096) {
+			break;
+		}
+		wired += m->vmp_wire_count != 0;
+		busy += m->vmp_busy;
+		laundry += m->vmp_laundry;
+		cleaning += m->vmp_cleaning;
+		absent += m->vmp_absent;
+		dirty += m->vmp_dirty;
+		if ((m->vmp_wire_count != 0 || m->vmp_busy || m->vmp_laundry || m->vmp_cleaning) && shown < 6) {
+			shown++;
+			printf("evb10: vmobj page offset %#llx phys %#llx wire %u busy %d laundry %d cleaning %d absent %d dirty %d\n",
+			    (unsigned long long)m->vmp_offset, (unsigned long long)VM_PAGE_GET_PHYS_PAGE(m) << 12, (unsigned)m->vmp_wire_count,
+			    (int)m->vmp_busy, (int)m->vmp_laundry, (int)m->vmp_cleaning, (int)m->vmp_absent, (int)m->vmp_dirty);
+		}
+	}
+	printf("evb10: vmobj pages %u (first 4096): wired %u busy %u laundry %u cleaning %u absent %u dirty %u\n", pages, wired, busy, laundry,
+	    cleaning, absent, dirty);
+}
+
 void
 evb10_task_threads_dump(task_t task, int sample)
 {
 	thread_t thread;
 	int shown = 0;
 	boolean_t want_bt = FALSE;
-	int limit = EVB10_SAMPLE_THREADS;
+	int limit = evb10_thr_limit();
 	uint64_t cache[3] = {0, 0, 0};
 	const char *bt_name;
 
@@ -143,6 +197,7 @@ evb10_task_threads_dump(task_t task, int sample)
 		int count, i;
 		uint64_t pc = 0, lr = 0, sp = 0, x0 = 0, x1 = 0, x16 = 0, far = 0;
 		uint32_t esr = 0;
+		vm_object_t waited = VM_OBJECT_NULL;
 		struct arm_saved_state *user;
 
 		if (++shown > limit) {
@@ -163,6 +218,13 @@ evb10_task_threads_dump(task_t task, int sample)
 		if (evb10_kbt_wanted() && (thread == current_thread() || thread->machine.kstackptr != NULL)) {
 			count = machine_trace_thread64(thread, (char *)frames, (char *)(frames + EVB10_SAMPLE_FRAMES), EVB10_SAMPLE_FRAMES,
 			    &flags) / (int)sizeof(frames[0]);
+		}
+		for (i = 0; i < count; i++) {
+			/* the frames are return addresses inside the function: vm_object_destroy() is a few hundred bytes long */
+			if (frames[i] >= (uint64_t)(uintptr_t)vm_object_destroy && frames[i] < (uint64_t)(uintptr_t)vm_object_destroy + 0x400) {
+				waited = (vm_object_t)(uintptr_t)((uint64_t)thread->wait_event & ~7ull);
+				break;
+			}
 		}
 		user = get_user_regs(thread);
 		if (user != NULL) {
@@ -185,6 +247,9 @@ evb10_task_threads_dump(task_t task, int sample)
 			printf(" %#llx", frames[i]);
 		}
 		printf("\n");
+		if (waited != VM_OBJECT_NULL) {
+			evb10_vm_object_report(waited);
+		}
 		if (want_bt && user != NULL) {
 			evb10_user_chain(task, thread, user);
 		}
@@ -659,5 +724,69 @@ evb10_cpu_stats_dump(void)
 		    owner != TASK_NULL ? task_pid(owner) : -1, active != THREAD_NULL && (active->state & TH_IDLE) ? " (idle)" : "");
 	}
 #endif
+}
+
+/*
+ * EVB10 (not a diagnostic: used by drivers/Mali, package/Mali/Mali.cpp, boCreateHost): does any part of [ptr, ptr + size) of the task's
+ * address space belong to a file, i.e. to an object whose pager (or a shadow's) is a vnode pager?
+ *
+ * A buffer object that pins such pages holds the object's activity count until it is freed. When the owner of the memory unmaps the file's
+ * last mapping with the vnode already marked for termination (a temporary file that was unlinked, as the render server's shared images of
+ * an application's icons are), vm_deallocate() goes down vnode_put() -> vclean() -> vm_object_destroy(), which waits for that count to drop.
+ * The render server's thread that does it is the one that retires the GPU work that holds the buffer object: both wait for each other and the
+ * screen stops (xnu-probe/runs/t17: backboardd's CARenderServer thread in vm_object_destroy, 'activity 2', twelve wired pages, from the
+ * first application launch on). Such memory is copied instead of pinned.
+ *
+ * Other kinds of pagers (device memory, IOSurface's, anonymous memory) answer false, so those are still imported without a copy.
+ */
+boolean_t
+evb10_range_is_file_backed(task_t task, uint64_t ptr, uint64_t size)
+{
+	vm_map_t map;
+	vm_map_offset_t addr = (vm_map_offset_t)ptr;
+	const vm_map_offset_t end = (vm_map_offset_t)(ptr + size);
+	boolean_t backed = FALSE;
+
+	if (task == TASK_NULL || size == 0 || end < addr) {
+		return FALSE;
+	}
+	map = get_task_map_reference(task);
+	if (map == VM_MAP_NULL) {
+		return FALSE;
+	}
+	vm_map_lock_read(map);
+	while (addr < end && !backed) {
+		vm_map_entry_t entry;
+		vm_object_t object;
+
+		if (!vm_map_lookup_entry(map, addr, &entry) || entry->is_sub_map) {
+			break;
+		}
+		object = VME_OBJECT(entry);
+		if (object != VM_OBJECT_NULL) {
+			vm_object_lock(object);
+		}
+		while (object != VM_OBJECT_NULL) {
+			vm_object_t next = object->shadow;
+			boolean_t vnode = object->pager != MEMORY_OBJECT_NULL && vnode_pager_lookup_vnode(object->pager) != NULL;
+
+			if (next != VM_OBJECT_NULL) {
+				vm_object_lock(next);
+			}
+			vm_object_unlock(object);
+			if (vnode) {
+				backed = TRUE;
+				if (next != VM_OBJECT_NULL) {
+					vm_object_unlock(next);
+				}
+				break;
+			}
+			object = next;
+		}
+		addr = entry->vme_end;
+	}
+	vm_map_unlock_read(map);
+	vm_map_deallocate(map);
+	return backed;
 }
 #endif /* DEVELOPMENT || DEBUG */
