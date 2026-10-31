@@ -74,5 +74,7 @@ a left one (cause not proven), fixed GPU and CPU clocks, interrupt-driven GPU co
 400 kHz (the default 100 kHz was checked by hand), audio and power management.
 
 Wi-Fi (the AP6398S on SDIO) works, opt-in: with `evb10-wifi=5` and a network in the local `.cache/firmware/join.txt` the firmware joins
-a WPA2-PSK network and iPadOS uses it as `en0` (DHCP, DNS and TCP from the userland; 105 MB received in one 240 s run). The data path is
-polled and slow, and nobody has used the Settings pane yet; [`docs/network.md`](docs/network.md) has the checkpoints and limits.
+a WPA2-PSK network and iPadOS uses it as `en0` (DHCP, DNS and TCP from the userland; 105 MB received in one 240 s run). The Settings Wi-Fi pane
+lists the network, joins it with a typed password, shows the address and forgets it (checked with scripted touches and screenshots, no person at the
+board; `evb10-wifi-join=2`, `scripts/gen-wifi-touch-script.py`); 5 GHz does not work yet. The data path is
+polled and slow; [`docs/network.md`](docs/network.md) has the checkpoints and limits.

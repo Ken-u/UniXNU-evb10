@@ -16,7 +16,7 @@
 | 数据卷 | `userdata` 最后 2049 MiB 做持久 Data 卷：首启格式化，重启直接挂载，写入 0 次失败 |
 | 输入 | I2C5 上的 Goodix 触摸，轮询 10 ms；一个 HID 设备接到原版 IOHIDEventDriver |
 | GPU | Mali-G610 → `Mali` 驱动 → PanVK → metal2vulkan → 原版 Metal 前端，锁屏壁纸和时钟整屏合成 |
-| Wi-Fi | AP6398S（BCM4359，SDIO）：内核下载固件、扫描、固件自带的 WPA2-PSK 入网，iPadOS 用它当 `en0`（DHCP、DNS、TCP 都是用户态自己发的）；默认关闭，`evb10-wifi=N` 打开，见 `docs/network.md` |
+| Wi-Fi | AP6398S（BCM4359，SDIO）：内核下载固件、扫描、固件自带的 WPA2-PSK 入网，iPadOS 用它当 `en0`（DHCP、DNS、TCP 都是用户态自己发的），「设置」里 Wi-Fi 页的列表、输入密码入网、状态、忘记网络都在板子上由脚本化触摸 + 截图验过（5 GHz 不行）；默认关闭，`evb10-wifi=N` 打开，见 `docs/network.md` |
 
 ## 坑清单（症状 → 原因 → 改法）
 
@@ -66,10 +66,26 @@
     处理：`dts/evb10.dts` 加一个只有 `unixnu,adt-name = "wlan"` 的节点（不写寄存器、不写 `interrupts`），`set3` 起 `wifid` 在 75 秒左右出现，
     开始用 Apple80211 ioctl 问 `en0`。顺带：当前网络（103）在 BSS 表里没有已入网的接入点时要从链路状态合成（否则 `ENOENT` 132 次）；
     383（接口属性表 plist）、470、471 这三个 set 每次状态变化都发，直接收下，否则守护进程反复重发。
-21. **脚本化触摸：锁屏要上滑两次，点按打不开设置。** `evb10-touch-script=SECS`（`touch_script.inc`，git 忽略）能在串口日志里配截图（每 28 秒一张）
-    无人值守地操作界面。锁屏第一次上滑总是丢（间隔 4–25 秒都一样，中间插点按没用），第二次才解锁；解锁后在 Dock 和主页上点「设置」图标（按住 20–900 ms，
-    带或不带抖动）都没有打开，也没有 `Preferences` 进程。没分清是点按到不了 SpringBoard，还是 App 没起来（长按出菜单可以区分，没做）。
-    所以「设置」里 Wi-Fi 页的扫描列表、输入密码入网、断开都没在板子上看到，要人手点一次、串口日志跑着（证据：`evidence/wifi-settings-20261031.txt`）。
+21. **脚本化触摸 + 截图能代替人手验「设置」。** `evb10-touch-script=SECS`（`touch_script.inc`，git 忽略，由 `scripts/gen-wifi-touch-script.py` 按 `join.txt` 生成，
+    密码只被翻成屏幕键盘的按键位置、不打印）无人值守地解锁（上滑两次，第一次总丢）、点「设置」、Wi-Fi、网络行、逐键输入密码、Join；`evb10-ps=12 evb10-shot-img=1
+    evb10-shot-scale=2` 让串口日志每 28 秒带一张截图，`uefi-evb10/tools/xnu-probe/shot2png.py` 还原成 PNG。`evb10-wifi-join=2` 让开机不自动入网、扫描只列 join 文件里的网络
+    （网络永远在第一行）。生成脚本带 `info` / `forget` / `rejoin` 参数还能点网络详情页、「忘记此网络」及确认、再入网一次。位置是 536×952 截图的像素（脚本里换算成千分比）。
+    **坑：** 列表里的行会因为信号弱消失，点偏了会把密码打进别的输入框（一次打进了可见的「名称」框，截图里是明文）：截图只留在 `tmp/`，不要进提交；那种日志要把 `evb10: img` 行删掉。
+    早先「点按打不开设置」是 `iconservicesagent` / `Preferences` 没有 Metal 设备（插件白名单和内核沙箱授权）加上 Mali 驱动对文件页的钉住，不是点按到不了（坑 22）。
+22. **「设置」自己要能起来：`iconservicesagent` 和 `Preferences` 要有 Metal 设备，Mali 对文件页要拷贝不要钉住。** `iconservicesagent` 经 Core Image 画「设置」的图标，没有 Metal
+    设备就退到 OpenGL ES（这台没有），在 `CI::GLContext::init` 跳到 0 崩掉（t19）：`NativeMaliMetalPlugin.mm` 的 `clientProcess()` 名单和 `package/Mali` 的沙箱授权都要点这两个名字。
+    Mali 驱动里 `BO_CREATE_HOST` 遇到文件页（应用的映射资源，渲染服务和应用共享）要拷贝：钉住会占着文件对象的 activity 计数，而那个文件最后一个映射被解除时要等它归零，
+    等的恰好是退役 GPU 工作的那个线程。症状是 `Preferences` 起来了、主线程卡在 `CASGetDisplays`（`evb10-bt=Preferences` + `dsc.py sym` 看到，t39–t41）。
+    **更大的坑：子模块里提交了，必须马上在 `UniXNU-evb10` 里 `git add package/Mali`**，否则下一次构建（`unixnu`）会把子模块重置回索引里的旧提交，改动悄悄消失（t39–t41 就是这样白跑的）。
+23. **「设置」里 Wi-Fi 的行要 MobileGestalt 说有 Wi-Fi。** 虚拟机模式（`vmm-present`）下它从 `/chosen` 的 `mac-address-wifi0` 回答 `wifi` 能力；没有这个属性就是全零地址、能力为假，
+    行被隐藏。`WifiNet.cpp` 的 `publish_registry()` 在驱动拿到模块地址后写它。MobileGestalt 的答案缓存在 Data 卷（首次启动写），旧 Data 卷要删一次
+    `com.apple.MobileGestalt.plist`（`UniXNU/docs/guide/mobilegestalt.md`）。没打开 `evb10-wifi=N` 的默认启动在这次改动后没看过。
+24. **入网后行上的转圈要等包过滤器的 tap。** 勾号出现在 `IO80211InterfaceIPConfigurationBusy` 变假的时候；地址配置的 ARP 监视通过 `/dev/bpf` 读路由器的应答，自己实现的 ifnet 要在
+    `ifnet_init_eparams.set_bpf_tap` 里给函数并对每个收发帧（含以太网头）调用它（`WifiNet.cpp` 的 `if_set_bpf_tap`）。没有 tap 时 busy 持续 64 秒（t36），有了 4.5–9.5 秒（t37、t42、t43）。
+    固件还只放行登记过的组播，`allmulti=1`（`Evb10Wifi.cpp`）才收得到 IPv6 邻居发现。
+25. **5 GHz 不行，锁到 2.4 GHz 也不是出路。** 固件会自己挑 5 GHz 的接入点：漫游过去之后 30 秒只多了 96 字节 TCP 载荷（t42）；忘记网络后再加入选到 5 GHz，关联无应答（事件 7 状态 5），「设置」弹「无法加入网络」（t43）。
+    试过 `WLC_SET_BAND`=2（`WLC_UP` 之前）把无线锁在 2.4 GHz：扫描只剩 2412 MHz，但 t46 的两次加入都在 0.5 秒后以事件 0 状态 3（找不到网络）失败，而不锁的首次加入（t36、t37、t42、t43）都是 1.7–1.8 秒成功，所以这个开关已经删掉。
+    没试的线索：CLM blob 没加载（文件是 2021 年的 1.39.1，固件内置的是 2023 年的 9.7.7）、nvram 里 `ccode=0 regrev=0`、发射功率；2.4 GHz 的扫描 RSSI 每次不同（t38 是 -44 dBm，t44–t46 是 -80 dBm）。
 
 ## 还欠的
 
@@ -79,5 +95,5 @@
   逐项数字和原因在 MaliMetal 仓库 `docs/notes.zh-CN.md` 的「帧率」「帧率（二）」两节。离 60 帧还差：触摸到第一帧的延迟（右滑 150 ms 以上，推测是 Today View 的小组件）、
   手势开头的重帧、频率固定（GPU 不调频，CPU 频率未管理）。
 - GPU 完成走轮询，没有中断；一个进程最多八个 group。
-- Wi-Fi：数据通路是轮询的 SDIO（约 25 MHz，无 DMA、无中断），下载峰值约 34 Mbit/s；`wifid` 已经起来并在问 `en0`，但「设置」里的 Wi-Fi 页没人在板子上打开过；5 GHz 和 WPA3 没试。
+- Wi-Fi：数据通路是轮询的 SDIO（约 25 MHz，无 DMA、无中断），下载峰值约 34 Mbit/s；「设置」里的 Wi-Fi 页用脚本化触摸验过列表、输密码加入、状态、忘记网络（坑 20–24）。**5 GHz 不行**（见坑 25）；开放网络、WPA3、隐藏网络、重启后是否记得网络、没带 `evb10-wifi=N` 的默认启动没试。
 - 音频、电源管理不在当前范围。

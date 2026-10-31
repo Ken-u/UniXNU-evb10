@@ -127,7 +127,7 @@ throughout. The packets are the userland's; the kernel only carries them. Nobody
 (`mobileassetd`, `nsurlsessiond`) and the 2 GiB Data window (about 250 MB free after a normal boot) can fill up within a few minutes,
 after which those daemons see `ENOSPC`; the next boot had its free space back. Nothing else is affected, which is why Wi-Fi stays opt-in.
 
-## Checkpoint 7: the Settings Wi-Fi pane (the daemon is attached; the pane itself was not seen)
+## Checkpoint 7: the Settings Wi-Fi pane (done: list, join with a password, status, forget; 5 GHz is not)
 
 The pane talks to `wifid`, not to the driver, and `wifid` is a launchd job (`com.apple.wifid.plist` in the root image) with
 `_LimitLoadToDeviceTree = ["wlan", "marconi-wifi"]`: it starts only on a device whose Apple device tree has a node named `wlan`. The EVB10's
@@ -147,14 +147,31 @@ radio info, a property list per state change). What `WifiNet.cpp` changed becaus
 * Still refused (`EOPNOTSUPP`, the daemon copes): 6, 18, 25, 57, 96, 97, 106, 207 (the channels-info structure, 10016 bytes, format not known),
   387, 419, 423, 473.
 
-**Not seen yet:** the pane itself. No scan request (10 or 86) and no association request (20) has arrived, because nothing opened Settings.
-`evb10-touch-script=SECS` (`Evb10Touch.cpp`) plays swipes and taps from `package/Evb10Touch/touch_script.inc` (git-ignored, compiled in) so
-that a run can open Settings without a person; with `evb10-ps=12 evb10-shot-img=1 evb10-shot-scale=2` the serial log carries a screenshot
-every 28 s. What it showed: the lock screen needs two swipes up (the first one is always lost, whatever the gap), and then the home screen is
-there; **taps on the Settings icon (Dock and home page, held for 20 to 900 ms, with and without jitter) did not open it, and no `Preferences`
-process appeared.** Whether the tap does not reach SpringBoard or the app does not start was not separated (a long press, which opens a
-context menu without launching anything, would tell). A person has to open Settings and the Wi-Fi pane once on the board while the log runs
-(`CAPTURE_SECS=600`) to finish this checkpoint.
+**The pane, driven without a person.** `evb10-touch-script=SECS` (`Evb10Touch.cpp`) plays swipes and taps from `package/Evb10Touch/touch_script.inc`
+(git-ignored, compiled in). `scripts/gen-wifi-touch-script.py` writes it from the join file: the passphrase becomes key positions of the on-screen
+keyboard and is never printed (`info`, `forget` and `rejoin` extend the script with the network's page, Forget This Network and a second join).
+With `evb10-ps=12 evb10-shot-img=1 evb10-shot-scale=2` the serial log carries a screenshot every 28 s (`uefi-evb10/tools/xnu-probe/shot2png.py`
+turns them into PNGs), and `evb10-wifi-join=2` leaves the join file alone at boot and lists only its network in scans, so the network is the first row
+of the list. The script, whose first step plays at about 127 s: two swipes up (the first one is always lost), Settings in the Dock, the Wi-Fi row,
+the network's row, the passphrase key by key, Join.
+
+Observed on the board (`evidence/wifi-settings-pane-20261031.txt`, runs t36 to t43; the screenshots are described, not stored, because a script that
+missed a row once typed the passphrase into a visible field):
+
+* Settings opens; its Wi-Fi row reads "Not Connected"; the Wi-Fi pane lists the network with a lock and the signal glyph; a tap on it opens
+  "Enter the password for ...".
+* After the typed passphrase and Join (runs t37, t42, t43): the association request (type 20, cipher 6, the 32-byte key the daemon derived) reaches
+  `WifiNet.cpp`, the firmware joins 1.7 s later (events 3, 16, 7), DHCP binds 3 s after that, and **the interface's busy flag
+  (`IO80211InterfaceIPConfigurationBusy`) goes false 4.5 to 9.5 s after the link**, which is when the row's spinner turns into the check mark. The status
+  bar shows the Wi-Fi glyph and the real time (the system fetched it over the network), the network's page shows the address, mask and router from
+  DHCP, and the system opens TCP connections to Apple servers (92 KB received 13 s after the join in t37).
+* Forget This Network and its confirmation (run t43): the daemon asks for a disassociate 0.6 s after the confirmation tap, the link goes down (events
+  11, 16) and the pane is back to the list, the network offered again, no check mark.
+* A failed join is reported as one: in run t43 the second join, after the Forget, was sent to the 5 GHz access point of the network; the association was
+  not acknowledged (event 7, status 5), the driver answered failure, and the pane showed "Unable to join the network". See the findings below for 5 GHz.
+
+What had to be right for that (each is a finding below): the Wi-Fi row at all (MobileGestalt), the spinner (a packet filter tap), IPv6 multicast
+(`allmulti`), and Settings itself (a Metal device for `iconservicesagent` and `Preferences`, and the copy of file-backed host buffers in the Mali driver).
 
 ## Findings from the bring-up
 
@@ -200,6 +217,42 @@ context menu without launching anything, would tell). A person has to open Setti
   runs after the change.
 * `en0` needs `IFNET_INIT_NX_NOAUTO`, `bpf_attach` and the registry entries `IONetworkStack`, `IO80211Controller` and `IO80211Interface`
   before the userland treats it as the Wi-Fi interface; the three classes are registered late (see checkpoint 6).
+* **Settings shows a Wi-Fi row only if MobileGestalt says the device has Wi-Fi, and in a virtual machine it says so from `/chosen`.** Settings
+  hides the Wi-Fi specifier unless the `wifi` capability is true. With `vmm-present` (which `board.toml` sets for `watchdogd`) MobileGestalt reads the
+  address from the property `mac-address-wifi0` of `/chosen`, which a boot loader fills in; without it the answer is a made-up address of zeros and the
+  capability is false, although `en0` and `wifid` are fine. The board has no boot loader that knows the module, so `publish_registry()` in
+  `WifiNet.cpp` sets the property from the module's own address once the firmware has reported it. MobileGestalt caches its answers on the Data volume
+  (`com.apple.MobileGestalt.plist` under `systemgroup.com.apple.mobilegestaltcache`, written at the first boot), so a Data volume that once booted
+  without the property keeps answering false until the file is deleted or the volume is rebuilt (`UniXNU/docs/guide/mobilegestalt.md`). The property is
+  set only when the driver runs (`evb10-wifi=N`); a boot without it was not looked at after this change.
+* **The row's spinner waits for the interface to stop being "busy", and that waits for a packet filter tap.** The wireless daemon shows the check
+  mark when `IO80211InterfaceIPConfigurationBusy` goes false, and the address configuration clears it once DHCP and its ARP check of the router are done.
+  The ARP monitor reads the router's replies through `/dev/bpf` on the interface, and for an interface that is not a stock Ethernet driver the stack
+  gives the packet filter no frames of its own: the driver has to supply `set_bpf_tap` in `ifnet_init_eparams` and call the function it receives with every frame
+  in both directions, Ethernet header included (`if_set_bpf_tap`, `on_rx` and `if_output` in `WifiNet.cpp`). `bpf_attach` alone only lets the DHCP client send.
+  Without the tap the interface was busy for 64 s (run t36: true at 268.4 s, false at 332.9 s, the link up since 267.5 s); with it 4.5 to 9.5 s (runs t37, t42,
+  t43). So the minute was a wait that ended by its own timeout (read from the disassembly of the address configuration daemon and confirmed by the
+  fix), not a delay of the driver or the radio.
+* **The firmware passes only the multicast groups it was told about** (`brcmf_netdev_set_multicast_list`), and the interface's list is not forwarded
+  (`SIOCADDMULTI` is a no-op here), so IPv6 neighbour discovery never arrived. `allmulti` set to 1 after `mpc` fixes that (neighbour advertisements
+  arrive from run t37 on). The test network sends no router advertisements at all, which the busy flag does not need once the tap is there.
+* **Settings only starts if its icon agent has a Metal device.** `iconservicesagent` draws Settings' icons through Core Image, which without a Metal
+  device falls back to OpenGL ES (this device has none) and ends in `CI::GLContext::init` with a jump to 0 (run t19). The plug-in's `clientProcess()`
+  list (MaliMetal `ca77d29`) and the sandbox grant of the Mali driver (`package/Mali` `9dd949a`) name `iconservicesagent` and `Preferences`. The same driver
+  commit makes a host buffer that sits on a file's pages (a mapped asset the render server shares with an application) a copy instead of a pin: the pin
+  held the file object's activity count, and unmapping the file's last mapping waits for it in the thread that retires the GPU work that holds the pin.
+  A build from the submodule commit before these two changes starts Settings and then leaves its main thread in `CASGetDisplays`, waiting for a reply from the
+  render server that never comes (runs t39 to t41, `evb10-bt=Preferences` symbolised on the host); with them the pane is on the screen within 4 s of the tap.
+  (A trap of this repository: `unixnu` resets `package/Mali` to the commit in the index, so a commit inside the submodule must be staged in
+  `UniXNU-evb10` before the next build; runs t39 to t41 were that mistake.)
+* **5 GHz does not work, and nothing here explains why yet.** After the firmware roamed to the 5 GHz access point of the test network
+  (e2:05:a4:08:eb:ca) the TCP payload counter rose by 96 bytes in 30 s (188826 to 188922, run t42); a join that picked that access point after a Forget
+  ended with an association nobody acknowledged (event 7, status 5, join result 3), which the pane shows as "Unable to join the network" (run t43). The
+  scan RSSI of the 2.4 GHz access point differs from run to run (-44 dBm in t38, -80 dBm in t44 to t46) and the link reads -80 dBm. The CLM blob is
+  not loaded (the file is data 1.39.1 of 2021, 5316 bytes; the firmware's built-in one is 9.7.7 of 2023) and the nvram has `ccode=0` and `regrev=0`;
+  neither was tried. Locking the radio to 2.4 GHz (`WLC_SET_BAND` 2 before `WLC_UP`, as a boot argument that was removed again) is not a way around it: the
+  scans then listed only 2412 MHz entries, but both joins of run t46 (265.8 s and 366.1 s) ended 0.5 s after the request with event 0, status 3 (no
+  network found), where the first joins of runs t36, t37, t42 and t43, without the lock, took 1.7 to 1.8 s and succeeded. No panic in the 480 s.
 
 ## Firmware and board data
 
@@ -224,17 +277,19 @@ kernel image by `scripts/build-wifi-firmware.py`. Without it levels 4 and 5 star
    the radio is the limit was not separated. Still to come: the sample and drive phases in `SDIO_CON0/1` (0xfd7c0c24/28) and 50 MHz or more, the
    host's internal DMA for the frames, and the interrupt (SPI 204, a fixed number: the node must not export `interrupts`; function 1's
    in-band interrupt) instead of the polling worker. The eMMC host (`dwcmshc`, `Rk3588Emmc`) is a different controller.
-2. **Settings.** `wifid` runs and is answered (checkpoint 7), but the Wi-Fi pane was not opened on the board: the scan list, the join with a
-   password (`kAssociate`, with a passphrase or a derived key, passed to `nw_wifi_connect`) and the disconnect are untested. The join at
-   boot is still the file's network, and the OS cannot store a network of its own (no keychain), so a network joined from the pane is not
-   remembered across boots.
-3. **Roaming, power save and wake.** One roam event (`event 19`) was seen and the link stayed up; `WL_HOST_WAKE` (GPIO0_B2) and power save
-   (`mpc` is 0, the radio stays on) are not used. 5 GHz joins were not tried (the test network was on 2.4 GHz).
+2. **Settings, the rest.** The list, the join with a password, the status and Forget This Network work (checkpoint 7). Not tried: an open network, WPA3,
+   a hidden network ("Other..."), the Wi-Fi switch of the pane after a join, and whether a network joined from the pane is remembered across
+   boots (the boot-time join of the join file is still what joins unless `evb10-wifi-join=0` or `2`). The pane shows a "Private Wi-Fi Address" (a random
+   one, 0E:...) that the driver does not program into the firmware: the router sees the module's own address (the DHCP replies are addressed to it).
+3. **5 GHz, and roaming.** See the findings below: the firmware's roam to the 5 GHz access point of the test network stopped the traffic (run t42) and a join
+   to it was not acknowledged (run t43). `WL_HOST_WAKE` (GPIO0_B2) and power save (`mpc` is 0, the radio stays on) are not used.
 4. **Background traffic fills the Data window** within minutes of having a network (see the side effects of checkpoint 6). A device with
    a bigger Data volume or a daemon policy would not have this.
 5. **Bluetooth** (UART9) is not part of this page.
 
 ## Next step
 
-Make the data path fast: the interrupt and the DMA of the host, 50 MHz, and the transmit worker blocked on events instead of polling. After
-that, 5 GHz. Before that, once: open Settings, Wi-Fi on the board with the log running and read the scan and association requests.
+Find out why 5 GHz fails, because the firmware picks that access point on its own: load the CLM blob (or set the nvram's `ccode`/`regrev`), look at
+the transmit power and the channel list the firmware reports, and join the 5 GHz access point alone (a BSSID in the join request) to separate the
+association from the roam. Then make the data path fast: the interrupt and the DMA of the host, 50 MHz, and the transmit worker blocked on events
+instead of polling. Not tried yet in the Settings pane: an open network, WPA3, a hidden network and a boot without `evb10-wifi`.

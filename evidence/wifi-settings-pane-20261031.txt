@@ -1,0 +1,99 @@
+# evb10 Wi-Fi in Settings: the pane driven by scripted touches, the join with a typed password, the status, Forget This Network, and what went wrong. 2026-10-31, evb10-wifi=5 evb10-wifi-join=2
+# Observed on the board over the serial line (runs t36, t37, t39 to t43); the log lines are copied unchanged (long ones are cut at 230 characters).
+# Nobody touched the board: evb10-touch-script played the taps and the screenshots of the serial log were read afterwards (the screenshots are described in words below,
+# they are not stored: a script that missed a row once typed the network's passphrase into a visible field).
+
+## Join from Settings (run t37; the touch script reached the Join button at 265.5 s): leave, join, link, DHCP, the interface busy flag, first connections
+[ 265.791] evb10: wifi-net: leave
+[ 265.845] evb10: wifi-net: join: ssid length 11, bssid given 0, key length 32 cipher 6
+[ 265.845] evb10: wifi: joining "HUAWEI-nemo" (WPA2-PSK, firmware supplicant)
+[ 267.597] evb10: wifi: join succeeded (result 0)
+[ 267.649] evb10: wifi-net: packet filter tap mode 3
+[ 267.649] evb10: wifi-net: packet filter tap mode 0
+[ 267.702] evb10: wifi-net: property list <dict>  <key>IO80211InterfaceIPConfigurationBusy</key>  <true/> </dict> </plist>                                                       
+[ 267.713] evb10: wifi: connected to e2:05:a4:08:eb:c6 on 2412 MHz, -80 dBm
+[ 269.352] evb10: wifi-net: packet filter tap mode 3
+[ 269.352] evb10: wifi-net: packet filter tap mode 0
+[ 270.593] evb10: wifi-net: packet filter tap mode 3
+[ 270.596] evb10: wifi-net: packet filter tap mode 0
+[ 270.878] evb10: wifi-net: dhcp in type 5 xid 08aecbaf flags 0000 to 9c:b8:b4:e8:78:60 yiaddr <leased address>
+[ 277.097] connectx() - failed necp_set_socket_domain_attributesevb10: wifi-net: property list <dict>  <key>IO80211InterfaceIPConfigurationBusy</key>  <false/> </dict> </plist>                                                      
+[ 279.069] evb10: wifi-net: in tcp 225 (syn-ack 72, 92783 payload bytes) udp 50 (dns 45) icmp 0
+[ 289.081] evb10: wifi-net: in tcp 415 (syn-ack 100, 216922 payload bytes) udp 71 (dns 63) icmp 0
+[ 299.097] evb10: wifi-net: in tcp 462 (syn-ack 105, 237508 payload bytes) udp 115 (dns 67) icmp 0
+
+## The same join before the packet filter tap existed (run t36): the interface stayed busy for 64 s, the row kept its spinner
+[ 266.398] evb10: wifi-net: join: ssid length 11, bssid given 0, key length 32 cipher 6
+[ 268.150] evb10: wifi: join succeeded (result 0)
+[ 268.420] evb10: wifi-net: property list <dict>  <key>IO80211InterfaceIPConfigurationBusy</key>  <true/> </dict> </plist>                                                       
+[ 271.092] evb10: wifi-net: dhcp in type 5 xid 617d994f flags 0000 to 9c:b8:b4:e8:78:60 yiaddr <leased address>
+[ 332.887] evb10: wifi-net: property list <dict>  <key>IO80211InterfaceIPConfigurationBusy</key>  <false/> </dict> </plist>                                                      
+
+## Forget This Network (run t43; the script tapped the (i) button at 295.4 s, Forget This Network at 301.4 s and Forget in the confirmation at 307.4 s)
+[ 295.423] evb10: touch: script step 22 at (653,239) of (720,1280)
+[ 301.430] evb10: touch: script step 23 at (152,176) of (720,1280)   (the console line is interleaved with a thread-table line there; this is its text)
+[ 303.165] evb10: wifi: event 16 status 0 reason 0 flags 1 authtype 0 data 22 from e2:05:a4:08:eb:ca
+[ 307.447] evb10: touch: script step 24 at (450,721) of (720,1280)
+[ 308.036] evb10: wifi-net: leave
+[ 308.036] evb10: wifi: disassociate 0
+[ 308.052] evb10: wifi: event 11 status 0 reason 8 flags 0 authtype 0 data 0 from e2:05:a4:08:eb:ca
+[ 308.052] evb10: wifi: event 16 status 0 reason 2 flags 0 authtype 0 data 0 from e2:05:a4:08:eb:ca
+[ 308.060] evb10: wifi-net: leave
+[ 308.060] evb10: wifi: disassociate 0
+
+## Join again after the Forget (run t43; the firmware chose the 5 GHz access point, e2:05:a4:08:eb:ca, and its association was not acknowledged: event 7 status 5; the pane showed "Unable to join the network")
+[ 366.064] evb10: wifi-net: leave
+[ 366.113] evb10: wifi-net: join: ssid length 11, bssid given 0, key length 32 cipher 6
+[ 366.113] evb10: wifi: joining "HUAWEI-nemo" (WPA2-PSK, firmware supplicant)
+[ 368.899] evb10: wifi: event 3 status 0 reason 0 flags 0 authtype 0 data 0 from e2:05:a4:08:eb:ca
+[ 368.928] evb10: wifi: event 7 status 5 reason 0 flags 0 authtype 0 data 192 from e2:05:a4:08:eb:ca
+[ 368.928] evb10: wifi: join failed (result 3)
+[ 368.928] evb10: wifi-net: join finished: module result 3
+[ 368.928] evb10: wifi: event 3 status 4 reason 0 flags 0 authtype 0 data 0 from e2:05:a4:08:eb:c6
+[ 368.928] evb10: wifi: event 0 status 4 reason 1 flags 0 authtype 0 data 11 from 00:00:00:00:00:00
+[ 368.948] evb10: wifi: event 3 status 6 reason 0 flags 0 authtype 0 data 0 from e2:05:a4:08:eb:c6
+
+## A roam to the 5 GHz access point while connected (run t42, no Forget): the link event comes, the traffic then stops (tcp payload counters of wifi-net before and after, 10 s apart)
+[ 289.111] evb10: wifi-net: in tcp 337 (syn-ack 61, 181061 payload bytes) udp 60 (dns 50) icmp 0
+[ 298.594] evb10: wifi: event 16 status 0 reason 0 flags 1 authtype 0 data 22 from e2:05:a4:08:eb:ca
+[ 298.649] evb10: wifi: event 19 status 0 reason 1 flags 0 authtype 0 data 0 from e2:05:a4:08:eb:ca
+[ 299.136] evb10: wifi-net: in tcp 347 (syn-ack 62, 188826 payload bytes) udp 60 (dns 50) icmp 0
+[ 309.124] evb10: wifi-net: in tcp 365 (syn-ack 62, 188874 payload bytes) udp 61 (dns 50) icmp 0
+[ 319.137] evb10: wifi-net: in tcp 378 (syn-ack 62, 188922 payload bytes) udp 62 (dns 50) icmp 0
+[ 329.145] evb10: wifi-net: in tcp 382 (syn-ack 62, 188922 payload bytes) udp 67 (dns 50) icmp 0
+[ 339.151] evb10: wifi-net: in tcp 382 (syn-ack 62, 188922 payload bytes) udp 82 (dns 51) icmp 0
+
+## Settings starts but its main thread never gets past the first call to the render server when the build lacks the two Mali / plug-in changes (runs t39 to t41, built from the submodule commit before them): ps, then evb10-bt=Preferences symbolised (run t41)
+[ 159.573] evb10: ubt Preferences: cache base 0x180000000 first 0xf3ec000 slide 0xf3ec000
+[ 159.573] evb10: ubt tid 0xca5 pc 0x1dab6cb58 lr 0x1dab70224 sp 0x16f08e510 fp 0x16f08e560 | up 0x1dab701b0 0x1dab6ffb8 0x1989384d0 0x19893508c 0x1988792d4 0x1989179f4 0x1995556f0 0x1997a6838 0x19984f8f8 0x100d78438 0x100d792e8 0
+[ 159.576] evb10: ubt tid 0xcb7 pc 0x1dab72b8c lr 0x1eca0de04 sp 0x16f112aa0 fp 0x16f112ad0 | up 0x1eca16b4c 0x1988792c4 0x1989179f4 0x199555774 0x1996a7f38 0x18f4e1f94 0x18f4dfa98 0x18f4df7b4 0x18f4d8bac 0x18f4d7000 0x1b66b2c30 0
+[ 148.465] evb10: ps 281   1 R   8    0.036    0.284 msg 133/41 sys 363/900 csw 1009 flt 1245 Preferences
+[ 176.501] evb10: ps 281   1 R   3    0.036    0.285 msg 135/41 sys 379/930 csw 1037 flt 1256 Preferences
+[ 203.127] evb10: ps 281   1 R   3    0.036    0.285 msg 135/41 sys 379/930 csw 1037 flt 1256 Preferences
+
+# host: dsc.py sym --slide f3ec000 on the frames of Preferences' main thread (run t41): libsystem_kernel`_mach_msg, QuartzCore`__CASGetDisplays,
+# QuartzCore`query_displays, QuartzCore`ensure_displays, +[CADisplay displays], UIKitCore`-[_UIScreenInitialDisplayConfigurationLoader _startPreloadInitialDisplayContext],
+# UIKitCore`__UIApplicationMainPreparations, UIKitCore`_UIApplicationMain; the second thread waits in a pthread mutex held by that +initialize.
+
+## What the screenshots showed (read on the host from the PNGs that shot2png.py makes of the serial log)
+# t37, shot at 289 s: the Wi-Fi pane with a check mark in front of the network, the Wi-Fi glyph in the status bar, the real date and time (9:53 AM Sat Oct 31 in t42).
+# t42, shot at 290 s: the Wi-Fi pane (switch on, the network ticked with its lock, signal and (i) buttons, "Other...", "Ask to Join Networks"), below it IP address, subnet mask and router
+#   from DHCP, "Configure DNS: Automatic", the Private Wi-Fi Address row.
+# t42, shot at 318 s: the network's page ("Forget This Network", Auto-Join on, Low Data Mode, Private Wi-Fi Address, IPv4 address (DHCP)) under the alert
+#   "Forget Wi-Fi Network "HUAWEI-nemo"?" with Cancel and Forget (the tap on Forget in this run missed: the script had pixel values where it needed permille).
+# t43, shot at 318 s: the Wi-Fi pane without a check mark, the network listed with a lock and signal glyph, "Other..." below it: the network was forgotten.
+# t43, shot at 345 s and 373 s: the password sheet of the second join, the alert "Unable to join the network "HUAWEI-nemo"" with OK.
+
+
+## Radio locked to 2.4 GHz (run t46, the `rejoin` script, band lock since removed from the driver): the joins find no network
+[  28.717] evb10: wifi: band locked to 2.4 GHz (0)
+[ 188.128] evb10: wifi-net: scan result 1: 2412 MHz, -81 dBm, HUAWEI-nemo
+[ 265.741] evb10: wifi-net: leave
+[ 265.811] evb10: wifi: joining "HUAWEI-nemo" (WPA2-PSK, firmware supplicant)
+[ 266.297] evb10: wifi: event 0 status 3 reason 0 flags 0 authtype 0 data 11 from 00:00:00:00:00:00
+[ 266.298] evb10: wifi: join failed (result 1)
+[ 366.056] evb10: wifi: joining "HUAWEI-nemo" (WPA2-PSK, firmware supplicant)
+[ 366.526] evb10: wifi: event 0 status 3 reason 0 flags 0 authtype 0 data 11 from 00:00:00:00:00:00
+[ 366.526] evb10: wifi: join failed (result 1)
+# For comparison, the first joins without the lock took 1.7 to 1.8 s and succeeded: t36 266.402 -> 268.150, t37 265.845 -> 267.597, t42 265.839 -> 267.535, t43 265.744 -> 267.502.
+# The unlocked second join of t43 (366.113 -> 368.928) was to the 5 GHz access point: event 0 status 4, join result 3. No panic in the 480 s of t46.
