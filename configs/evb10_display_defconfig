@@ -24,7 +24,7 @@ CONFIG_XNU_NATIVE_VIRTIO_CONSOLE=n
 # The eMMC host (package/Rk3588Emmc, bound to the original IOBlockStorageDevice by scripts/bind-emmc-storage.py),
 # the touch panel, the Mali-G610, the HID input device and the link stubs. The base build has no switch for
 # them, so they join the link through the generic extra-archive hook.
-CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/rk3588-emmc/libRk3588Emmc.a -Wl,-force_load,{tree}/build/evb10-touch/libEvb10Touch.a -Wl,-force_load,{tree}/build/evb10-wifi/libEvb10Wifi.a -Wl,-force_load,{tree}/build/evb10-audio/libEvb10Audio.a -Wl,-force_load,{tree}/build/evb10-wifinet/libEvb10WifiNet.a -Wl,-force_load,{tree}/build/mali/libMali.a -Wl,-force_load,{tree}/build/evb10-hid/libEvb10Hid.a {tree}/build/link-stubs/libLinkStubs.a"
+CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/rk3588-emmc/libRk3588Emmc.a -Wl,-force_load,{tree}/build/evb10-touch/libEvb10Touch.a -Wl,-force_load,{tree}/build/evb10-wifi/libEvb10Wifi.a -Wl,-force_load,{tree}/build/evb10-audio/libEvb10Audio.a -Wl,-force_load,{tree}/build/rk3588-dvfs/libRk3588Dvfs.a -Wl,-force_load,{tree}/build/evb10-wifinet/libEvb10WifiNet.a -Wl,-force_load,{tree}/build/mali/libMali.a -Wl,-force_load,{tree}/build/evb10-hid/libEvb10Hid.a {tree}/build/link-stubs/libLinkStubs.a"
 
 # --- kernel facilities the port expects ----------------------------------------------------------------
 # 4 KiB signature hashes derived from verified 16 KiB blocks; no archive, no hardware assumption.

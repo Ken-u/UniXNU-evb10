@@ -935,6 +935,8 @@ extern "C" void evb10_touch_start(void);
 extern "C" void evb10_wifi_start(void);
 // package/Evb10Audio: the audio codec's I2C bus and registers (evb10-audio=1).
 extern "C" void evb10_audio_start(void);
+// UniXNU-rk3588-common scripts/data/Rk3588Dvfs: the SoC's frequency management (rk3588-dvfs=<mode>).
+extern "C" void rk3588_dvfs_start(void);
 // package/Mali: the Mali-G610 bring-up (mali=<milestone>).
 extern "C" void mali_start(void);
 static void legacy_late_probe_body(void) {
@@ -943,6 +945,7 @@ static void legacy_late_probe_body(void) {
     evb10_touch_start();
     evb10_wifi_start();
     evb10_audio_start();
+    rk3588_dvfs_start();
     mali_start();
     IOService *display=pendingLegacyDisplay;if(!display)return;pendingLegacyDisplay=nullptr;
     native_legacy_surface_status=OSKextLoadKextWithIdentifier("com.apple.iokit.IOSurface");
