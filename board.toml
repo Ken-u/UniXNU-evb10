@@ -88,6 +88,9 @@ trust_cache_sha256 = [
 #              filter for converted YCbCr textures; mali-aflush=1 flushes a command buffer's surfaces beside its replay; cpumask=31 runs the four
 #              Cortex-A76 cores (logical 0..3, the device tree lists them first) and the boot core; mali-epri=50 raises the encoding thread of the
 #              render server to priority 50 and sched-slowcpus=240 keeps the interactive threads off the Cortex-A55 cores while a fast core is free.
+#   audio      evb10-audio=4 starts the audio service (an IOService that audiomxd opens; its thread feeds the ES8388 over I2S0);
+#              evb10-audio-hal=1 makes the payload carry the audio server plug-in and the kernel mount it over /System/Library/Audio/Plug-Ins/HAL
+#              (needs evb10-gpu-addon=1: the plug-in travels in the same addon). Tuning, not in the list: evb10-audio-out, -vol, -linger, -selftest.
 #   debugging  not in the list below, add them with EXTRA_KERNEL_ARGS (the command line is limited to 1000 bytes): evb10-ps=N (process table every
 #              N seconds), evb10-bt=NAME (evb10-bt2..4; user stacks of the named processes at each table), mali-timeline=1, mali-profile=1,
 #              evb10-touch-demo=SECS (scripted swipes), evb10-touch-khz=400 (touch bus clock).
@@ -139,6 +142,8 @@ kernel_args = [
   "mali-aflush=1",
   "mali-epri=50",
   "evb10-gpu-addon=1",
+  "evb10-audio=4",
+  "evb10-audio-hal=1",
   "evb10-touch-xmax=720",
   "evb10-touch-ymax=1280",
   "evb10-hid-input=1",

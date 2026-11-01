@@ -17,7 +17,7 @@
  
  	/*
  	 * Copy out program name.
-@@ -8261,6 +8271,2263 @@
+@@ -8261,6 +8271,2294 @@
  
  	panic("Process 1 exec of %s failed, errno %d", ((i == 0) ? "<null>" : init_programs[i - 1]), error);
  }
@@ -1785,6 +1785,15 @@
 +#define EVB10_ADDON_SOURCE EVB10_NGPU_DIR "/addons"
 +#define EVB10_ADDON_POINT "/System/Library/Extensions"
 +#define EVB10_ADDON_BUNDLE EVB10_ADDON_POINT "/NativeMaliMetal.bundle"
++/* The audio server plug-in of the board (evb10-audio-hal=1; hal/Evb10AudioPlugIn.c): the addon carries audio/Evb10Audio.driver/*, and
++ * /private/var/ngpu/audio goes over the directory the audio server loads its driver bundles from, next to the system's BuiltinAudioPlugin. */
++#define EVB10_AUDIO_SOURCE EVB10_NGPU_DIR "/audio"
++#define EVB10_AUDIO_POINT "/System/Library/Audio/Plug-Ins/HAL"
++#define EVB10_AUDIO_SEALED EVB10_AUDIO_POINT "/BuiltinAudioPlugin.driver"
++#define EVB10_AUDIO_DRIVER EVB10_AUDIO_POINT "/Evb10Audio.driver"
++volatile int evb10_audio_stage = 0;
++volatile int evb10_audio_status = -1;
++static volatile int evb10_audio_ready;
 +volatile int evb10_addon_files = -1;
 +volatile int evb10_addon_written = 0;
 +volatile int evb10_addon_same = 0;
@@ -1932,25 +1941,28 @@
 +	return evb10_addon_failed ? EIO : 0;
 +}
 +
-+/* /private/var/ngpu/addons over /System/Library/Extensions: the owner's bindfs mount, before launchd, without the entitlement an ordinary mount
-+ * of that type needs (native_bindfs_boot_mount is set around this one mount() call only). */
++/* A directory of /private/var/ngpu over a system directory: the owner's bindfs mount, before launchd, without the entitlement an ordinary
++ * mount of that type needs (native_bindfs_boot_mount is set around this one mount() call only). The stage counts what worked: 1 the
++ * source is there, 2 the mount arguments are in place, 3 mounted, 4 a sealed entry of the system directory shows through the union,
++ * 5 the owner's entry shows as well. The return value is 0 or the error of the step that stopped. */
 +static int
-+evb10_addon_mount(proc_t p, user_addr_t scratch)
++evb10_ngpu_mount(proc_t p, user_addr_t scratch, const char *source, size_t source_size, const char *point, size_t point_size,
++    const char *sealed, const char *own, volatile int *stage)
 +{
 +	struct mount_args request = {.type = scratch + 0x400, .path = scratch + 0x420, .flags = MNT_RDONLY | MNT_UNION, .data = scratch + 0x500};
 +	int32_t result = 0;
 +	vnode_t probe = NULLVP;
 +	int error;
 +
-+	evb10_addon_stage = 1;
-+	if ((error = vnode_lookup(EVB10_ADDON_SOURCE, 0, &probe, vfs_context_current())) != 0) {
++	*stage = 1;
++	if ((error = vnode_lookup(source, 0, &probe, vfs_context_current())) != 0) {
 +		return error;
 +	}
 +	vnode_put(probe);
 +	probe = NULLVP;
-+	evb10_addon_stage = 2;
-+	if ((error = copyout("bindfs", request.type, 7)) || (error = copyout(EVB10_ADDON_POINT, request.path, sizeof(EVB10_ADDON_POINT))) ||
-+	    (error = copyout(EVB10_ADDON_SOURCE, request.data, sizeof(EVB10_ADDON_SOURCE)))) {
++	*stage = 2;
++	if ((error = copyout("bindfs", request.type, 7)) || (error = copyout(point, request.path, point_size)) ||
++	    (error = copyout(source, request.data, source_size))) {
 +		return error;
 +	}
 +	native_bindfs_boot_mount = 1;
@@ -1959,19 +1971,27 @@
 +	if (error) {
 +		return error;
 +	}
-+	evb10_addon_stage = 3;
++	*stage = 3;
 +	/* The union shows a sealed lower entry next to the owner's ... */
-+	if ((error = vnode_lookup(EVB10_ADDON_POINT "/AGXMetalA10.bundle", 0, &probe, vfs_context_current())) == 0) {
++	if ((error = vnode_lookup(sealed, 0, &probe, vfs_context_current())) == 0) {
 +		vnode_put(probe);
 +		probe = NULLVP;
-+		evb10_addon_stage = 4;
++		*stage = 4;
 +	}
 +	/* ... and the owner's own entry is visible through it. */
-+	if ((error = vnode_lookup(EVB10_ADDON_BUNDLE "/Info.plist", 0, &probe, vfs_context_current())) == 0) {
++	if ((error = vnode_lookup(own, 0, &probe, vfs_context_current())) == 0) {
 +		vnode_put(probe);
-+		evb10_addon_stage = 5;
++		*stage = 5;
 +	}
 +	return error;
++}
++
++/* /private/var/ngpu/addons over /System/Library/Extensions (the Metal plugin). */
++static int
++evb10_addon_mount(proc_t p, user_addr_t scratch)
++{
++	return evb10_ngpu_mount(p, scratch, EVB10_ADDON_SOURCE, sizeof(EVB10_ADDON_SOURCE), EVB10_ADDON_POINT, sizeof(EVB10_ADDON_POINT),
++	    EVB10_ADDON_POINT "/AGXMetalA10.bundle", EVB10_ADDON_BUNDLE "/Info.plist", &evb10_addon_stage);
 +}
 +
 +/*
@@ -2083,6 +2103,14 @@
 +	printf("evb10: addon: mounted over " EVB10_ADDON_POINT ": stage %d status %d (5 = our bundle visible next to the sealed ones)\n",
 +	    evb10_addon_stage, evb10_addon_status);
 +	evb10_addon_ready = evb10_addon_stage >= 3;
++	int audio_arg = 0;
++	if (PE_parse_boot_argn("evb10-audio-hal", &audio_arg, sizeof(audio_arg)) && audio_arg) {
++		evb10_audio_status = evb10_ngpu_mount(p, scratch, EVB10_AUDIO_SOURCE, sizeof(EVB10_AUDIO_SOURCE), EVB10_AUDIO_POINT,
++		    sizeof(EVB10_AUDIO_POINT), EVB10_AUDIO_SEALED, EVB10_AUDIO_DRIVER "/Info.plist", &evb10_audio_stage);
++		printf("evb10: audio hal: mounted over " EVB10_AUDIO_POINT ": stage %d status %d (5 = Evb10Audio.driver visible next to the sealed plug-ins)\n",
++		    evb10_audio_stage, evb10_audio_status);
++		evb10_audio_ready = evb10_audio_stage >= 3;
++	}
 +}
 +
 +#define EVB10_EXEC_DIR "/private/var/evb10"
@@ -2155,7 +2183,7 @@
 +	int length = MAXPATHLEN;
 +	char *path;
 +
-+	if (!evb10_exec_ready && !evb10_addon_ready) {
++	if (!evb10_exec_ready && !evb10_addon_ready && !evb10_audio_ready) {
 +		return 0;
 +	}
 +	path = kalloc_data(MAXPATHLEN, Z_WAITOK);
@@ -2169,6 +2197,9 @@
 +		} else if (evb10_addon_ready && strncmp(path, EVB10_ADDON_BUNDLE "/", sizeof(EVB10_ADDON_BUNDLE)) == 0) {
 +			ok = 1;
 +			printf("evb10: addon: mmap granted for %s\n", path);
++		} else if (evb10_audio_ready && strncmp(path, EVB10_AUDIO_DRIVER "/", sizeof(EVB10_AUDIO_DRIVER)) == 0) {
++			ok = 1;
++			printf("evb10: audio hal: mmap granted for %s\n", path);
 +		}
 +	}
 +	kfree_data(path, MAXPATHLEN);
