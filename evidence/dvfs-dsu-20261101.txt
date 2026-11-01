@@ -1,0 +1,18 @@
+## DSU clock and the latency of a Cortex-A76 core's loads on the EVB10 (run dvfs7, `rk3588-dvfs=5`, serial log of the kernel)
+# command: cd uefi-evb10 && EXTRA_KERNEL_ARGS="rk3588-dvfs=5" tools/xnu-probe/run-kernel.sh dvfs7
+# The Cortex-A55 clock goes down its points (the firmware's clock service sets the DSU to the same rate); cpu0 (a Cortex-A76 at 2.2 GHz) chases a random cycle of
+# cache lines through 2 MiB (past its 512 KiB L2, in the L3) and through 24 MiB (memory). The last line asks the clock service for 1800 MHz on the DSU alone.
+[  30.895] rk3588-dvfs: chain: bound to cpu0, running on cpu0, loads 1048576
+[  30.961] rk3588-dvfs: chain: 459697 ticks, 19154041 ns, at 0
+[  30.961] rk3588-dvfs: chain: bound to cpu0, running on cpu0, loads 1048576
+[  31.013] rk3588-dvfs: chain: 457303 ticks, 19054291 ns, at 0
+[  31.205] rk3588-dvfs: chain: 1517460 ticks, 63227500 ns, at 0
+[  31.404] rk3588-dvfs: dsu: cortex-a55 1800 MHz, dsu 1800 MHz: cpu0 load from the l3 18.1 ns, from memory 120.4 ns
+[  31.918] rk3588-dvfs: dsu: cortex-a55 1608 MHz, dsu 1608 MHz: cpu0 load from the l3 19.3 ns, from memory 122.3 ns
+[  32.448] rk3588-dvfs: dsu: cortex-a55 1416 MHz, dsu 1416 MHz: cpu0 load from the l3 20.9 ns, from memory 124.7 ns
+[  33.006] rk3588-dvfs: dsu: cortex-a55 1200 MHz, dsu 1200 MHz: cpu0 load from the l3 22.9 ns, from memory 128.2 ns
+[  33.602] rk3588-dvfs: dsu: cortex-a55 1008 MHz, dsu 1008 MHz: cpu0 load from the l3 26.1 ns, from memory 134.3 ns
+[  34.249] rk3588-dvfs: dsu: cortex-a55 816 MHz, dsu 816 MHz: cpu0 load from the l3 30.2 ns, from memory 142.6 ns
+[  34.991] rk3588-dvfs: dsu: cortex-a55 600 MHz, dsu 594 MHz: cpu0 load from the l3 37.8 ns, from memory 156.7 ns
+[  35.896] rk3588-dvfs: dsu: cortex-a55 408 MHz, dsu 396 MHz: cpu0 load from the l3 51.9 ns, from memory 180.8 ns
+[  35.959] rk3588-dvfs: dsu: set 1800 MHz with the cortex-a55 cores at 408 MHz: 0, reads 1800 MHz (0): cpu0 load from the l3 23.3 ns

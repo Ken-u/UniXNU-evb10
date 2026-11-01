@@ -1,0 +1,256 @@
+## CPU frequency governor on the EVB10: frame rate with and without it, and a 600 s run (runs gov2, base1, gov3; serial logs of the kernel)
+# gov2:  cd uefi-evb10 && CAPTURE_SECS=235 EARLY_STOP=0 EXTRA_KERNEL_ARGS="evb10-touch-demo=120 mali-timeline=1 rk3588-dvfs=6" tools/xnu-probe/run-kernel.sh gov2
+# base1: the same without rk3588-dvfs=6 (the clusters stay where the firmware leaves them: Cortex-A76 2.23 GHz measured, Cortex-A55 1.86 GHz)
+# gov3:  CAPTURE_SECS=600, the committed arguments (rk3588-dvfs=6 is in board.toml), EXTRA_KERNEL_ARGS="evb10-touch-demo=120 mali-timeline=1"
+# Frame rates are those of `python3 tools/xnu-probe/frame_phases.py TAG` (the scripted swipes of evb10-touch-demo, finger down 0.8 s each). The governor lines are
+# printed every ten seconds: per cluster the operating point changes, the mean rate, the share of the window the busiest core was busy, the rail voltage at that
+# moment and the time spent at each point; "gov dsu" the mean DSU rate and the touch boosts so far. The system boots (launchd, SpringBoard) in the first ~100 s,
+# the swipes start about 150 s in. The "busy" figures of gov2 are a tenth of the real share (a printing error, fixed before gov3). Power and temperature were
+# not measured.
+
+== gov2 (governor): frame rate
+gov2: per gesture, finger down (0.8 s): fps, mean gap ms, gaps > 25 ms; GPU busy %, CBs, median CB gpu ms; settle: frames
+  g 0 swipe up      21.2 fps  gap  16.6 ms  slow  0   GPU   3.4%  CBs  23 med   0.8 ms   settle   0 frames
+  g 2 swipe right   30.0 fps  gap  18.1 ms  slow  1   GPU  25.8%  CBs  21 med   9.9 ms   settle  50 frames
+  g 3 swipe left    55.0 fps  gap  17.4 ms  slow  1   GPU  47.4%  CBs  38 med   9.6 ms   settle  32 frames
+  g 4 swipe right   46.2 fps  gap  17.1 ms  slow  1   GPU  41.7%  CBs  34 med   9.8 ms   settle  37 frames
+  g 5 swipe left    57.5 fps  gap  17.1 ms  slow  1   GPU  49.3%  CBs  39 med   9.7 ms   settle  31 frames
+  g 6 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  46.9%  CBs  38 med   9.7 ms   settle  37 frames
+  g 7 swipe left    58.8 fps  gap  16.6 ms  slow  0   GPU  49.7%  CBs  40 med   9.6 ms   settle  33 frames
+  g 8 swipe right   46.2 fps  gap  16.6 ms  slow  0   GPU  40.7%  CBs  34 med   9.1 ms   settle  38 frames
+  g 9 swipe left    56.2 fps  gap  17.0 ms  slow  1   GPU  49.3%  CBs  39 med   9.6 ms   settle  33 frames
+  g10 swipe right   48.8 fps  gap  16.7 ms  slow  0   GPU  41.3%  CBs  35 med   9.2 ms   settle  38 frames
+  g11 swipe left    57.5 fps  gap  16.7 ms  slow  0   GPU  50.3%  CBs  40 med   9.6 ms   settle  33 frames
+  g12 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  43.6%  CBs  36 med   9.8 ms   settle  31 frames
+  mean over 12 moving gestures: 48.1 fps while the finger is down; median CB gpu 9.6 ms
+  gestures 3-11 (9): 52.9 fps, 4 gaps > 25 ms, 58.8 fps best, median CB gpu 9.6 ms
+== base1 (no governor): frame rate
+base1: per gesture, finger down (0.8 s): fps, mean gap ms, gaps > 25 ms; GPU busy %, CBs, median CB gpu ms; settle: frames
+  g 0 swipe up      18.8 fps  gap  16.6 ms  slow  0   GPU   2.6%  CBs  15 med   0.8 ms   settle   1 frames
+  g 2 swipe right   31.2 fps  gap  18.0 ms  slow  1   GPU  26.0%  CBs  21 med  10.1 ms   settle  34 frames
+  g 3 swipe left    52.5 fps  gap  17.9 ms  slow  2   GPU  49.7%  CBs  38 med  10.0 ms   settle  47 frames
+  g 4 swipe right   45.0 fps  gap  17.6 ms  slow  2   GPU  39.8%  CBs  33 med   9.9 ms   settle  36 frames
+  g 5 swipe left    53.8 fps  gap  17.9 ms  slow  3   GPU  46.2%  CBs  36 med   9.8 ms   settle  46 frames
+  g 6 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  45.0%  CBs  38 med   9.2 ms   settle  37 frames
+  g 7 swipe left    58.8 fps  gap  16.6 ms  slow  0   GPU  51.9%  CBs  40 med   9.8 ms   settle  46 frames
+  g 8 swipe right   48.8 fps  gap  17.1 ms  slow  1   GPU  41.6%  CBs  35 med   9.8 ms   settle  34 frames
+  g 9 swipe left    57.5 fps  gap  16.6 ms  slow  0   GPU  52.6%  CBs  40 med   9.9 ms   settle  46 frames
+  g10 swipe right   50.0 fps  gap  16.7 ms  slow  0   GPU  45.5%  CBs  38 med   9.7 ms   settle  36 frames
+  g11 swipe left    58.8 fps  gap  16.6 ms  slow  0   GPU  49.9%  CBs  39 med   9.7 ms   settle  46 frames
+  g12 swipe right   47.5 fps  gap  17.1 ms  slow  1   GPU  40.9%  CBs  34 med   9.6 ms   settle  33 frames
+  mean over 12 moving gestures: 47.7 fps while the finger is down; median CB gpu 9.8 ms
+  gestures 3-11 (9): 52.8 fps, 8 gaps > 25 ms, 58.8 fps best, median CB gpu 9.8 ms
+== gov3 (governor, 600 s): frame rate
+gov3: per gesture, finger down (0.8 s): fps, mean gap ms, gaps > 25 ms; GPU busy %, CBs, median CB gpu ms; settle: frames
+  g 0 swipe up      38.8 fps  gap  16.7 ms  slow  0   GPU   4.0%  CBs  30 med   0.8 ms   settle   0 frames
+  g 2 swipe right   28.8 fps  gap  18.2 ms  slow  2   GPU  24.8%  CBs  20 med  10.1 ms   settle  34 frames
+  g 3 swipe left    56.2 fps  gap  16.6 ms  slow  0   GPU  49.6%  CBs  39 med   9.7 ms   settle  47 frames
+  g 4 swipe right   47.5 fps  gap  16.6 ms  slow  0   GPU  42.2%  CBs  35 med   9.8 ms   settle  36 frames
+  g 5 swipe left    56.2 fps  gap  17.1 ms  slow  1   GPU  48.5%  CBs  38 med   9.8 ms   settle  46 frames
+  g 6 swipe right   48.8 fps  gap  16.6 ms  slow  0   GPU  45.1%  CBs  37 med   9.7 ms   settle  37 frames
+  g 7 swipe left    57.5 fps  gap  16.7 ms  slow  0   GPU  49.7%  CBs  39 med   9.7 ms   settle  47 frames
+  g 8 swipe right   47.5 fps  gap  17.5 ms  slow  2   GPU  43.8%  CBs  36 med   9.4 ms   settle  33 frames
+  g 9 swipe left    58.8 fps  gap  16.6 ms  slow  0   GPU  52.0%  CBs  40 med   9.9 ms   settle  46 frames
+  g10 swipe right   47.5 fps  gap  17.1 ms  slow  1   GPU  43.0%  CBs  35 med   9.8 ms   settle  36 frames
+  g11 swipe left    57.5 fps  gap  16.6 ms  slow  0   GPU  50.9%  CBs  40 med   9.7 ms   settle  47 frames
+  g12 swipe right   48.8 fps  gap  17.5 ms  slow  1   GPU  42.9%  CBs  36 med   9.6 ms   settle  31 frames
+  g13 swipe left    53.8 fps  gap  16.6 ms  slow  0   GPU  48.4%  CBs  37 med  10.0 ms   settle  50 frames
+  g14 swipe right   51.2 fps  gap  17.1 ms  slow  1   GPU  44.8%  CBs  37 med   9.8 ms   settle  34 frames
+  g15 swipe left    56.2 fps  gap  16.6 ms  slow  0   GPU  50.8%  CBs  39 med   9.9 ms   settle  46 frames
+  g16 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  45.6%  CBs  38 med   9.4 ms   settle  24 frames
+  g17 swipe left    57.5 fps  gap  17.0 ms  slow  1   GPU  50.9%  CBs  39 med   9.9 ms   settle  46 frames
+  g18 swipe right   47.5 fps  gap  17.1 ms  slow  1   GPU  41.4%  CBs  34 med   9.8 ms   settle  36 frames
+  g19 swipe left    53.8 fps  gap  17.8 ms  slow  2   GPU  47.2%  CBs  37 med   9.8 ms   settle  46 frames
+  g20 swipe right   51.2 fps  gap  16.7 ms  slow  0   GPU  45.5%  CBs  38 med   9.8 ms   settle  33 frames
+  g21 swipe left    58.8 fps  gap  16.7 ms  slow  0   GPU  52.2%  CBs  40 med   9.9 ms   settle  46 frames
+  g22 swipe right   48.8 fps  gap  16.6 ms  slow  0   GPU  41.9%  CBs  36 med   9.2 ms   settle  37 frames
+  g23 swipe left    46.2 fps  gap  16.6 ms  slow  0   GPU  46.0%  CBs  37 med   9.6 ms   settle  46 frames
+  g24 swipe right   51.2 fps  gap  16.6 ms  slow  0   GPU  46.8%  CBs  39 med   9.8 ms   settle  35 frames
+  g25 swipe left    57.5 fps  gap  16.7 ms  slow  0   GPU  52.1%  CBs  41 med   9.7 ms   settle  46 frames
+  g26 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  44.9%  CBs  37 med   9.9 ms   settle  34 frames
+  g27 swipe left    52.5 fps  gap  18.3 ms  slow  3   GPU  46.4%  CBs  35 med  10.0 ms   settle  46 frames
+  g28 swipe right   48.8 fps  gap  17.1 ms  slow  1   GPU  41.3%  CBs  35 med   9.6 ms   settle  37 frames
+  g29 swipe left    56.2 fps  gap  17.0 ms  slow  1   GPU  51.0%  CBs  40 med   9.8 ms   settle  47 frames
+  g30 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  46.0%  CBs  38 med   9.8 ms   settle  31 frames
+  g31 swipe left    57.5 fps  gap  17.0 ms  slow  1   GPU  51.9%  CBs  40 med   9.9 ms   settle  46 frames
+  g32 swipe right   51.2 fps  gap  16.7 ms  slow  0   GPU  46.5%  CBs  38 med   9.9 ms   settle  36 frames
+  g33 swipe left    58.8 fps  gap  16.7 ms  slow  0   GPU  51.9%  CBs  41 med   9.7 ms   settle  46 frames
+  g34 swipe right   45.0 fps  gap  17.6 ms  slow  1   GPU  38.6%  CBs  32 med   9.9 ms   settle  31 frames
+  g35 swipe left    57.5 fps  gap  17.0 ms  slow  1   GPU  51.0%  CBs  39 med   9.8 ms   settle  46 frames
+  g36 swipe right   51.2 fps  gap  16.6 ms  slow  0   GPU  46.9%  CBs  39 med   9.7 ms   settle  35 frames
+  g37 swipe left    51.2 fps  gap  18.7 ms  slow  3   GPU  45.0%  CBs  36 med   9.7 ms   settle  46 frames
+  g38 swipe right   50.0 fps  gap  17.1 ms  slow  1   GPU  43.0%  CBs  36 med   9.8 ms   settle  24 frames
+  g39 swipe left    56.2 fps  gap  17.0 ms  slow  1   GPU  51.0%  CBs  39 med   9.9 ms   settle  47 frames
+  g40 swipe right   48.8 fps  gap  17.1 ms  slow  1   GPU  43.1%  CBs  36 med   9.7 ms   settle  36 frames
+  g41 swipe left    55.0 fps  gap  17.4 ms  slow  2   GPU  46.8%  CBs  37 med   9.6 ms   settle  46 frames
+  g42 swipe right   51.2 fps  gap  16.6 ms  slow  0   GPU  46.6%  CBs  39 med   9.6 ms   settle  35 frames
+  g43 swipe left    56.2 fps  gap  17.0 ms  slow  1   GPU  50.7%  CBs  39 med   9.9 ms   settle  46 frames
+  g44 swipe right   50.0 fps  gap  17.1 ms  slow  1   GPU  41.8%  CBs  35 med   9.8 ms   settle  34 frames
+  g45 swipe left    53.8 fps  gap  17.8 ms  slow  3   GPU  47.8%  CBs  37 med   9.9 ms   settle  45 frames
+  g46 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  46.8%  CBs  39 med   9.2 ms   settle  37 frames
+  g47 swipe left    58.8 fps  gap  16.6 ms  slow  0   GPU  50.4%  CBs  40 med   9.7 ms   settle  45 frames
+  g48 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  42.9%  CBs  36 med   9.4 ms   settle  32 frames
+  g49 swipe left    57.5 fps  gap  16.6 ms  slow  0   GPU  52.1%  CBs  40 med   9.9 ms   settle  44 frames
+  g50 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  45.7%  CBs  38 med   9.7 ms   settle  36 frames
+  g51 swipe left    56.2 fps  gap  17.0 ms  slow  1   GPU  49.2%  CBs  39 med   9.7 ms   settle  46 frames
+  g52 swipe right   47.5 fps  gap  17.5 ms  slow  1   GPU  40.9%  CBs  34 med   9.8 ms   settle  32 frames
+  g53 swipe left    56.2 fps  gap  17.0 ms  slow  1   GPU  48.8%  CBs  38 med   9.8 ms   settle  45 frames
+  g54 swipe right   48.8 fps  gap  17.1 ms  slow  1   GPU  42.4%  CBs  36 med   9.2 ms   settle  37 frames
+  g55 swipe left    57.5 fps  gap  17.0 ms  slow  1   GPU  49.8%  CBs  39 med   9.8 ms   settle  46 frames
+  g56 swipe right   43.8 fps  gap  17.6 ms  slow  2   GPU  42.7%  CBs  35 med   9.8 ms   settle  27 frames
+  g57 swipe left    58.8 fps  gap  16.6 ms  slow  0   GPU  52.1%  CBs  40 med   9.9 ms   settle  46 frames
+  g58 swipe right   51.2 fps  gap  16.6 ms  slow  0   GPU  47.7%  CBs  39 med   9.8 ms   settle  27 frames
+  g59 swipe left    56.2 fps  gap  17.4 ms  slow  2   GPU  47.0%  CBs  37 med   9.7 ms   settle  45 frames
+  g60 swipe right   51.2 fps  gap  16.6 ms  slow  0   GPU  44.6%  CBs  37 med   9.8 ms   settle  32 frames
+  g61 swipe left    55.0 fps  gap  17.4 ms  slow  2   GPU  49.3%  CBs  38 med   9.8 ms   settle  47 frames
+  g62 swipe right   48.8 fps  gap  17.1 ms  slow  1   GPU  42.0%  CBs  35 med   9.3 ms   settle  32 frames
+  g63 swipe left    53.8 fps  gap  18.2 ms  slow  4   GPU  45.5%  CBs  36 med   9.8 ms   settle  45 frames
+  mean over 63 moving gestures: 52.1 fps while the finger is down; median CB gpu 9.8 ms
+  gestures 3-11 (9): 53.1 fps, 4 gaps > 25 ms, 58.8 fps best, median CB gpu 9.7 ms
+
+== gov2: governor lines, t = 30 s to 235 s
+[  30.866] rk3588-dvfs: governor: 3 domains, floor 0 MHz, boost 1000 ms, window 16 ms
+[  40.874] rk3588-dvfs: gov cpul: 0 changes, mean 415 MHz, busy 0%, 950 mV; 408:99%
+[  40.874] rk3588-dvfs: gov cpub01: 8 changes, mean 555 MHz, busy 0%, 675 mV; 408:85% 1200:12% 2400:2%
+[  40.874] rk3588-dvfs: gov cpub23: 2 changes, mean 2379 MHz, busy 9%, 1000 mV; 1200:1% 2400:98%
+[  40.874] rk3588-dvfs: gov dsu: mean 1800 MHz; boosts 0
+[  50.889] rk3588-dvfs: gov cpul: 0 changes, mean 408 MHz, busy 0%, 950 mV; 408:100%
+[  50.889] rk3588-dvfs: gov cpub01: 2 changes, mean 428 MHz, busy 0%, 675 mV; 408:97% 1200:2%
+[  50.889] rk3588-dvfs: gov cpub23: 0 changes, mean 2400 MHz, busy 10%, 1000 mV; 2400:100%
+[  50.889] rk3588-dvfs: gov dsu: mean 1800 MHz; boosts 0
+[  60.889] rk3588-dvfs: gov cpul: 0 changes, mean 408 MHz, busy 0%, 950 mV; 408:100%
+[  60.889] rk3588-dvfs: gov cpub01: 4 changes, mean 465 MHz, busy 0%, 675 mV; 408:92% 1200:7%
+[  60.889] rk3588-dvfs: gov cpub23: 0 changes, mean 2400 MHz, busy 10%, 1000 mV; 2400:100%
+[  60.889] rk3588-dvfs: gov dsu: mean 1800 MHz; boosts 0
+[  70.910] rk3588-dvfs: gov cpul: 0 changes, mean 727 MHz, busy 2%, 675 mV; 408:74% 600:1% 816:1% 1800:21%
+[  70.910] rk3588-dvfs: gov cpub01: 57 changes, mean 1749 MHz, busy 6%, 675 mV; 1200:42% 1416:6% 1608:5% 1800:4% 2016:2% 2400:38%
+[  70.910] rk3588-dvfs: gov cpub23: 52 changes, mean 1311 MHz, busy 3%, 675 mV; 408:8% 1200:69% 1416:7% 2400:11%
+[  70.910] rk3588-dvfs: gov dsu: mean 1498 MHz; boosts 0
+[  80.917] rk3588-dvfs: gov cpul: 0 changes, mean 1247 MHz, busy 5%, 950 mV; 408:29% 600:6% 816:4% 1008:3% 1200:1% 1800:55%
+[  80.917] rk3588-dvfs: gov cpub01: 83 changes, mean 1730 MHz, busy 6%, 1000 mV; 1200:39% 1416:11% 1608:6% 1800:2% 2016:2% 2208:1% 2304:1% 2400:34%
+[  80.917] rk3588-dvfs: gov cpub23: 71 changes, mean 1700 MHz, busy 5%, 762 mV; 1200:46% 1416:7% 1608:5% 1800:1% 2016:2% 2208:3% 2400:32%
+[  80.917] rk3588-dvfs: gov dsu: mean 1560 MHz; boosts 0
+[  90.929] rk3588-dvfs: gov cpul: 0 changes, mean 1411 MHz, busy 5%, 950 mV; 408:16% 600:7% 816:3% 1008:2% 1200:1% 1608:1% 1800:66%
+[  90.929] rk3588-dvfs: gov cpub01: 96 changes, mean 1965 MHz, busy 6%, 1000 mV; 1200:11% 1416:13% 1608:9% 1800:8% 2016:4% 2208:4% 2304:1% 2400:45%
+[  90.929] rk3588-dvfs: gov cpub23: 102 changes, mean 1894 MHz, busy 6%, 675 mV; 1200:22% 1416:11% 1608:7% 1800:6% 2016:5% 2208:1% 2400:44%
+[  90.930] rk3588-dvfs: gov dsu: mean 1668 MHz; boosts 0
+[ 100.939] rk3588-dvfs: gov cpul: 0 changes, mean 1163 MHz, busy 4%, 950 mV; 408:32% 600:8% 816:2% 1008:3% 1200:1% 1416:3% 1608:1% 1800:46%
+[ 100.939] rk3588-dvfs: gov cpub01: 91 changes, mean 1788 MHz, busy 6%, 1000 mV; 1200:29% 1416:13% 1608:6% 1800:8% 2016:5% 2208:2% 2400:34%
+[ 100.939] rk3588-dvfs: gov cpub23: 95 changes, mean 1739 MHz, busy 6%, 1000 mV; 1200:30% 1416:16% 1608:12% 1800:4% 2400:34%
+[ 100.939] rk3588-dvfs: gov dsu: mean 1591 MHz; boosts 0
+[ 110.953] rk3588-dvfs: gov cpul: 0 changes, mean 1152 MHz, busy 4%, 950 mV; 408:36% 600:2% 816:4% 1008:3% 1200:5% 1416:1% 1608:1% 1800:44%
+[ 110.953] rk3588-dvfs: gov cpub01: 86 changes, mean 1967 MHz, busy 6%, 1000 mV; 1200:17% 1416:11% 1608:6% 1800:8% 2016:2% 2208:1% 2304:1% 2400:51%
+[ 110.953] rk3588-dvfs: gov cpub23: 95 changes, mean 1923 MHz, busy 6%, 1000 mV; 1200:23% 1416:10% 1608:8% 1800:1% 2016:3% 2208:3% 2400:49%
+[ 110.953] rk3588-dvfs: gov dsu: mean 1629 MHz; boosts 0
+[ 120.956] rk3588-dvfs: gov cpul: 0 changes, mean 1169 MHz, busy 4%, 950 mV; 408:35% 600:7% 816:2% 1008:1% 1200:1% 1800:51%
+[ 120.956] rk3588-dvfs: gov cpub01: 85 changes, mean 1885 MHz, busy 6%, 675 mV; 1200:25% 1416:13% 1608:3% 1800:4% 2016:3% 2208:2% 2400:46%
+[ 120.956] rk3588-dvfs: gov cpub23: 81 changes, mean 1854 MHz, busy 6%, 1000 mV; 1200:26% 1416:12% 1608:5% 1800:6% 2016:4% 2208:1% 2400:42%
+[ 120.956] rk3588-dvfs: gov dsu: mean 1627 MHz; boosts 0
+[ 130.969] rk3588-dvfs: gov cpul: 0 changes, mean 919 MHz, busy 2%, 950 mV; 408:58% 600:3% 816:2% 1800:34%
+[ 130.969] rk3588-dvfs: gov cpub01: 78 changes, mean 1990 MHz, busy 5%, 1000 mV; 1200:27% 1416:5% 1800:2% 2208:1% 2304:1% 2400:61%
+[ 130.969] rk3588-dvfs: gov cpub23: 81 changes, mean 1754 MHz, busy 4%, 1000 mV; 1200:44% 1416:6% 1608:4% 1800:1% 2400:42%
+[ 130.970] rk3588-dvfs: gov dsu: mean 1690 MHz; boosts 0
+[ 140.974] rk3588-dvfs: gov cpul: 0 changes, mean 896 MHz, busy 2%, 675 mV; 408:61% 600:2% 1800:33%
+[ 140.975] rk3588-dvfs: gov cpub01: 75 changes, mean 1715 MHz, busy 4%, 675 mV; 408:1% 1200:46% 1416:7% 1800:1% 2016:1% 2400:39%
+[ 140.975] rk3588-dvfs: gov cpub23: 66 changes, mean 1554 MHz, busy 3%, 675 mV; 408:10% 1200:50% 1416:2% 2016:1% 2208:2% 2304:1% 2400:31%
+[ 140.975] rk3588-dvfs: gov dsu: mean 1477 MHz; boosts 0
+[ 150.994] rk3588-dvfs: gov cpul: 0 changes, mean 473 MHz, busy 0%, 675 mV; 408:95% 1800:4%
+[ 150.994] rk3588-dvfs: gov cpub01: 43 changes, mean 1359 MHz, busy 1%, 675 mV; 408:14% 1200:59% 1416:1% 1608:2% 2400:21%
+[ 150.994] rk3588-dvfs: gov cpub23: 33 changes, mean 1219 MHz, busy 1%, 675 mV; 408:34% 1200:39% 1416:1% 2400:24%
+[ 150.994] rk3588-dvfs: gov dsu: mean 1172 MHz; boosts 1
+[ 161.009] rk3588-dvfs: gov cpul: 0 changes, mean 419 MHz, busy 0%, 675 mV; 408:98%
+[ 161.009] rk3588-dvfs: gov cpub01: 41 changes, mean 1319 MHz, busy 0%, 675 mV; 408:18% 1200:58% 2400:21%
+[ 161.009] rk3588-dvfs: gov cpub23: 26 changes, mean 1160 MHz, busy 0%, 675 mV; 408:34% 1200:44% 2400:19%
+[ 161.009] rk3588-dvfs: gov dsu: mean 1093 MHz; boosts 2
+[ 171.015] rk3588-dvfs: gov cpul: 0 changes, mean 506 MHz, busy 0%, 675 mV; 408:92% 1800:6%
+[ 171.016] rk3588-dvfs: gov cpub01: 28 changes, mean 1488 MHz, busy 1%, 675 mV; 408:20% 1200:41% 2400:37%
+[ 171.016] rk3588-dvfs: gov cpub23: 21 changes, mean 1333 MHz, busy 1%, 675 mV; 408:39% 1200:23% 2400:37%
+[ 171.016] rk3588-dvfs: gov dsu: mean 1214 MHz; boosts 4
+[ 181.027] rk3588-dvfs: gov cpul: 0 changes, mean 469 MHz, busy 0%, 950 mV; 408:94% 600:1% 1800:4%
+[ 181.027] rk3588-dvfs: gov cpub01: 51 changes, mean 1354 MHz, busy 1%, 1000 mV; 408:16% 1200:58% 2400:23%
+[ 181.027] rk3588-dvfs: gov cpub23: 22 changes, mean 1027 MHz, busy 0%, 675 mV; 408:51% 1200:27% 1416:1% 2400:19%
+[ 181.027] rk3588-dvfs: gov dsu: mean 1103 MHz; boosts 5
+[ 191.041] rk3588-dvfs: gov cpul: 0 changes, mean 474 MHz, busy 0%, 950 mV; 408:94% 600:1% 1800:4%
+[ 191.041] rk3588-dvfs: gov cpub01: 25 changes, mean 1314 MHz, busy 1%, 1000 mV; 408:32% 1200:36% 2400:31%
+[ 191.041] rk3588-dvfs: gov cpub23: 23 changes, mean 1229 MHz, busy 0%, 1000 mV; 408:42% 1200:27% 2400:30%
+[ 191.041] rk3588-dvfs: gov dsu: mean 1097 MHz; boosts 7
+[ 201.047] rk3588-dvfs: gov cpul: 0 changes, mean 472 MHz, busy 0%, 675 mV; 408:93% 600:1% 1800:4%
+[ 201.047] rk3588-dvfs: gov cpub01: 34 changes, mean 1359 MHz, busy 1%, 675 mV; 408:21% 1200:50% 2400:27%
+[ 201.047] rk3588-dvfs: gov cpub23: 31 changes, mean 1244 MHz, busy 0%, 675 mV; 408:34% 1200:39% 2400:26%
+[ 201.047] rk3588-dvfs: gov dsu: mean 1153 MHz; boosts 8
+[ 211.043] rk3588-dvfs: gov cpul: 0 changes, mean 501 MHz, busy 0%, 950 mV; 408:92% 1800:6%
+[ 211.043] rk3588-dvfs: gov cpub01: 38 changes, mean 1296 MHz, busy 1%, 1000 mV; 408:21% 1200:54% 1416:2% 2400:21%
+[ 211.043] rk3588-dvfs: gov cpub23: 29 changes, mean 1106 MHz, busy 0%, 1000 mV; 408:43% 1200:34% 1416:1% 2400:20%
+[ 211.043] rk3588-dvfs: gov dsu: mean 1102 MHz; boosts 10
+[ 221.056] rk3588-dvfs: gov cpul: 0 changes, mean 579 MHz, busy 1%, 675 mV; 408:86% 600:1% 1800:11%
+[ 221.056] rk3588-dvfs: gov cpub01: 33 changes, mean 1554 MHz, busy 2%, 675 mV; 408:14% 1200:46% 2400:38%
+[ 221.056] rk3588-dvfs: gov cpub23: 15 changes, mean 1357 MHz, busy 1%, 675 mV; 408:37% 1200:24% 2400:37%
+[ 221.056] rk3588-dvfs: gov dsu: mean 1252 MHz; boosts 11
+[ 231.074] rk3588-dvfs: gov cpul: 0 changes, mean 445 MHz, busy 0%, 675 mV; 408:97% 1800:2%
+[ 231.074] rk3588-dvfs: gov cpub01: 32 changes, mean 1208 MHz, busy 0%, 675 mV; 408:29% 1200:50% 2400:19%
+[ 231.074] rk3588-dvfs: gov cpub23: 23 changes, mean 1030 MHz, busy 0%, 675 mV; 408:50% 1200:30% 2400:19%
+[ 231.074] rk3588-dvfs: gov dsu: mean 1010 MHz; boosts 12
+
+== gov3: governor lines of the last 150 s (the swipes run all the time)
+[ 451.195] rk3588-dvfs: gov cpul: 0 changes, mean 473 MHz, busy 6%, 675 mV; 408:94% 600:1% 1800:4%
+[ 451.196] rk3588-dvfs: gov cpub01: 34 changes, mean 1556 MHz, busy 14%, 675 mV; 408:16% 1200:42% 2400:39%
+[ 451.196] rk3588-dvfs: gov cpub23: 28 changes, mean 1442 MHz, busy 12%, 675 mV; 408:27% 1200:33% 2400:37%
+[ 451.196] rk3588-dvfs: gov dsu: mean 1277 MHz; boosts 44
+[ 461.198] rk3588-dvfs: gov cpul: 0 changes, mean 444 MHz, busy 3%, 675 mV; 408:95% 600:1% 1800:2%
+[ 461.199] rk3588-dvfs: gov cpub01: 38 changes, mean 1276 MHz, busy 10%, 675 mV; 408:20% 1200:58% 2400:19%
+[ 461.199] rk3588-dvfs: gov cpub23: 24 changes, mean 1048 MHz, busy 7%, 675 mV; 408:48% 1200:31% 2400:19%
+[ 461.199] rk3588-dvfs: gov dsu: mean 1070 MHz; boosts 45
+[ 471.201] rk3588-dvfs: gov cpul: 0 changes, mean 509 MHz, busy 7%, 950 mV; 408:91% 600:1% 1800:7%
+[ 471.201] rk3588-dvfs: gov cpub01: 25 changes, mean 1364 MHz, busy 13%, 1000 mV; 408:25% 1200:43% 2400:30%
+[ 471.201] rk3588-dvfs: gov cpub23: 21 changes, mean 1228 MHz, busy 9%, 1000 mV; 408:44% 1200:24% 2400:31%
+[ 471.201] rk3588-dvfs: gov dsu: mean 1118 MHz; boosts 47
+[ 481.217] rk3588-dvfs: gov cpul: 0 changes, mean 503 MHz, busy 5%, 675 mV; 408:91% 600:1% 1800:6%
+[ 481.217] rk3588-dvfs: gov cpub01: 37 changes, mean 1371 MHz, busy 12%, 675 mV; 408:26% 1200:42% 2400:31%
+[ 481.217] rk3588-dvfs: gov cpub23: 22 changes, mean 1177 MHz, busy 7%, 675 mV; 408:41% 1200:31% 1608:1% 2400:24%
+[ 481.217] rk3588-dvfs: gov dsu: mean 1135 MHz; boosts 48
+[ 491.231] rk3588-dvfs: gov cpul: 0 changes, mean 467 MHz, busy 4%, 950 mV; 408:95% 1800:4%
+[ 491.231] rk3588-dvfs: gov cpub01: 30 changes, mean 1308 MHz, busy 11%, 1000 mV; 408:20% 1200:56% 2400:22%
+[ 491.231] rk3588-dvfs: gov cpub23: 21 changes, mean 1053 MHz, busy 7%, 1000 mV; 408:52% 1200:25% 2400:22%
+[ 491.231] rk3588-dvfs: gov dsu: mean 1091 MHz; boosts 50
+[ 501.242] rk3588-dvfs: gov cpul: 0 changes, mean 487 MHz, busy 5%, 675 mV; 408:93% 1800:5%
+[ 501.242] rk3588-dvfs: gov cpub01: 24 changes, mean 1383 MHz, busy 12%, 675 mV; 408:31% 1200:32% 2400:35%
+[ 501.242] rk3588-dvfs: gov cpub23: 19 changes, mean 1278 MHz, busy 10%, 675 mV; 408:42% 1200:22% 2400:34%
+[ 501.242] rk3588-dvfs: gov dsu: mean 1154 MHz; boosts 51
+[ 511.251] rk3588-dvfs: gov cpul: 0 changes, mean 455 MHz, busy 3%, 675 mV; 408:95% 600:1% 1800:3%
+[ 511.251] rk3588-dvfs: gov cpub01: 42 changes, mean 1295 MHz, busy 10%, 675 mV; 408:19% 1200:58% 2400:20%
+[ 511.251] rk3588-dvfs: gov cpub23: 27 changes, mean 1112 MHz, busy 7%, 675 mV; 408:40% 1200:39% 2400:19%
+[ 511.251] rk3588-dvfs: gov dsu: mean 1118 MHz; boosts 52
+[ 521.266] rk3588-dvfs: gov cpul: 0 changes, mean 514 MHz, busy 6%, 675 mV; 408:90% 600:2% 1800:7%
+[ 521.266] rk3588-dvfs: gov cpub01: 30 changes, mean 1502 MHz, busy 13%, 675 mV; 408:20% 1200:39% 2400:38%
+[ 521.266] rk3588-dvfs: gov cpub23: 23 changes, mean 1395 MHz, busy 10%, 675 mV; 408:31% 1200:31% 2400:37%
+[ 521.266] rk3588-dvfs: gov dsu: mean 1242 MHz; boosts 54
+[ 531.281] rk3588-dvfs: gov cpul: 0 changes, mean 464 MHz, busy 3%, 675 mV; 408:95% 1800:3%
+[ 531.281] rk3588-dvfs: gov cpub01: 34 changes, mean 1198 MHz, busy 10%, 675 mV; 408:32% 1200:45% 1416:1% 2400:20%
+[ 531.281] rk3588-dvfs: gov cpub23: 18 changes, mean 1018 MHz, busy 6%, 675 mV; 408:52% 1200:28% 2400:19%
+[ 531.281] rk3588-dvfs: gov dsu: mean 1027 MHz; boosts 55
+[ 541.286] rk3588-dvfs: gov cpul: 0 changes, mean 483 MHz, busy 6%, 950 mV; 408:92% 600:2% 1800:5%
+[ 541.286] rk3588-dvfs: gov cpub01: 31 changes, mean 1394 MHz, busy 13%, 1000 mV; 408:24% 1200:42% 2400:32%
+[ 541.286] rk3588-dvfs: gov cpub23: 19 changes, mean 1246 MHz, busy 10%, 1000 mV; 408:42% 1200:25% 2400:31%
+[ 541.286] rk3588-dvfs: gov dsu: mean 1143 MHz; boosts 57
+[ 551.277] rk3588-dvfs: gov cpul: 0 changes, mean 472 MHz, busy 4%, 675 mV; 408:94% 1800:4%
+[ 551.294] rk3588-dvfs: gov cpub01: 23 changes, mean 1192 MHz, busy 9%, 675 mV; 408:37% 1200:37% 2400:24%
+[ 551.294] rk3588-dvfs: gov cpub23: 25 changes, mean 1144 MHz, busy 7%, 675 mV; 408:44% 1200:29% 1416:1% 2400:24%
+[ 551.294] rk3588-dvfs: gov dsu: mean 1038 MHz; boosts 58
+[ 561.310] rk3588-dvfs: gov cpul: 0 changes, mean 446 MHz, busy 3%, 950 mV; 408:96% 1800:2%
+[ 561.310] rk3588-dvfs: gov cpub01: 31 changes, mean 1206 MHz, busy 11%, 1000 mV; 408:32% 1200:44% 2400:22%
+[ 561.310] rk3588-dvfs: gov cpub23: 20 changes, mean 1075 MHz, busy 7%, 1000 mV; 408:49% 1200:28% 2400:22%
+[ 561.310] rk3588-dvfs: gov dsu: mean 1012 MHz; boosts 60
+[ 571.321] rk3588-dvfs: gov cpul: 0 changes, mean 646 MHz, busy 14%, 762 mV; 408:80% 600:1% 1800:16%
+[ 571.321] rk3588-dvfs: gov cpub01: 38 changes, mean 1548 MHz, busy 21%, 850 mV; 408:19% 1200:36% 1416:1% 1608:1% 2400:40%
+[ 571.321] rk3588-dvfs: gov cpub23: 23 changes, mean 1437 MHz, busy 17%, 725 mV; 408:30% 1200:27% 1416:1% 1608:1% 2400:39%
+[ 571.321] rk3588-dvfs: gov dsu: mean 1295 MHz; boosts 61
+[ 581.333] rk3588-dvfs: gov cpul: 0 changes, mean 592 MHz, busy 12%, 950 mV; 408:85% 600:1% 1800:12%
+[ 581.333] rk3588-dvfs: gov cpub01: 29 changes, mean 2002 MHz, busy 62%, 1000 mV; 1200:29% 1416:1% 1608:1% 2400:66%
+[ 581.333] rk3588-dvfs: gov cpub23: 44 changes, mean 1578 MHz, busy 32%, 675 mV; 408:9% 1200:50% 1416:2% 2400:37%
+[ 581.333] rk3588-dvfs: gov dsu: mean 1666 MHz; boosts 62
+[ 591.342] rk3588-dvfs: gov cpul: 0 changes, mean 1077 MHz, busy 39%, 950 mV; 408:49% 600:2% 1416:1% 1800:46%
+[ 591.342] rk3588-dvfs: gov cpub01: 40 changes, mean 2086 MHz, busy 48%, 1000 mV; 408:2% 1200:21% 1416:1% 2400:74%
+[ 591.342] rk3588-dvfs: gov cpub23: 51 changes, mean 1836 MHz, busy 31%, 675 mV; 408:7% 1200:32% 1416:1% 2400:57%
+[ 591.342] rk3588-dvfs: gov dsu: mean 1773 MHz; boosts 64
+
+== gov3: lines with panic / Assertion failed / data abort in the kernel log: 0

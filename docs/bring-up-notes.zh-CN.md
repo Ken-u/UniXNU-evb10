@@ -93,7 +93,11 @@
   板上（`v1`，默认参数，演示手势）：手指按下期间手势 3–11 平均 52.6 帧/秒，最好 57.5；重命令缓冲从提交到完成 p50 14.9 ms、p90 18.9 ms，8.7 % 赶不上 19.3 ms 的期限。
   GPU 1 GHz 是选项（要 `GPU_RAIL_UV=850000` 的固件和 `mali-npll=1000`，写法在 `docs/reproduce.md`）：赶不上的降到 1.6–2.5 %，12 分钟稳定。
   逐项数字和原因在 MaliMetal 仓库 `docs/notes.zh-CN.md` 的「帧率」「帧率（二）」两节。离 60 帧还差：触摸到第一帧的延迟（右滑 150 ms 以上，推测是 Today View 的小组件）、
-  手势开头的重帧、频率固定（GPU 不调频，CPU 频率未管理）。
+  手势开头的重帧、GPU 频率固定（CPU 已有调频，见下一条）。
+- CPU 调频：`rk3588-dvfs=6` 默认开（`docs/power.md`，机制在 SoC 仓库 `scripts/data/Rk3588Dvfs/`）。三个簇和 DSU 的频率与电压一起调，每 16 ms 按空闲时间定档，触摸拉满大核 1 秒。
+  板上：固件的 PVTPLL 让「报的频率」不等于实际（1.0 V 下 1608 MHz 以上都只有 2230 MHz），写对电压后实测频率与表差在 5 % 内（`evidence/dvfs-operating-points-20261101.txt`）；
+  DSU 跟小核时钟和电压，大核读 L3 的延迟随它从 18 ns 涨到 52 ns（`evidence/dvfs-dsu-20261101.txt`），所以 DSU 跟着大核的 3/4 走。
+  演示手势 3–11：开调频 52.9 帧/秒，不开 52.8；600 秒 63 次滑动 52.1 帧/秒、无 panic（`evidence/dvfs-governor-20261101.txt`）。**没测功耗和温度**，只有各档停留时间；GPU / DDR 频率没做。
 - GPU 完成走轮询，没有中断；一个进程最多八个 group。
 - Wi-Fi：数据通路是轮询的 SDIO（约 25 MHz，无 DMA、无中断），下载峰值约 34 Mbit/s；「设置」里的 Wi-Fi 页用脚本化触摸验过列表、输密码加入、状态、忘记网络（坑 20–24）。**5 GHz 不行**（见坑 25）；开放网络、WPA3、隐藏网络、重启后是否记得网络、没带 `evb10-wifi=N` 的默认启动没试。
 - 音频：接到 iPadOS 了（`docs/audio.md`，`evb10-audio=4` + `evb10-audio-hal=1`，默认开）。内核侧：I2C7 上 ES8388 在 0x11 应答；I2S0 做主，12.288 MHz 的 MCLK 来自 GPLL，48 kHz；

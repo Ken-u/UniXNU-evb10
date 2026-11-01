@@ -1,0 +1,75 @@
+## Cluster operating points with voltage on the EVB10 (run dvfs5, `rk3588-dvfs=4`, serial log of the kernel)
+# command: cd uefi-evb10 && EXTRA_KERNEL_ARGS="rk3588-dvfs=4" tools/xnu-probe/run-kernel.sh dvfs5
+# Each cluster walks down its operating points and back up: voltage first going up, rate first going down, then a dependent add chain on a thread bound to the
+# cluster's first core measures the clock the core really runs at. "rail reads" is the regulator read back over SPI2 / I2C0. This run waited for the regulator's
+# ramp with the slew rate in mV/us instead of uV/us (the "set ... in N us" times of the up steps are that wait; the voltages and the clocks are not affected).
+# The same boot, before the sweep: the regulators and the firmware's rates.
+[  30.840] rk3588-dvfs: pmic: rk806 chip name 0x80 version 0x62 (0, 0)
+[  30.840] rk3588-dvfs: pmic: rk806 buck1 750 mV (0)
+[  30.840] rk3588-dvfs: pmic: rk806 buck2 950 mV (0)
+[  30.850] rk3588-dvfs: pmic: rk806 buck3 750 mV (0)
+[  30.850] rk3588-dvfs: pmic: rk806 buck4 750 mV (0)
+[  30.850] rk3588-dvfs: pmic: rk806 buck5 850 mV (0)
+[  30.850] rk3588-dvfs: pmic: rk860x i2c0 0x42 die id 10: 1000000 uV (0), reg0 0x97 (0)
+[  30.850] rk3588-dvfs: pmic: rk860x i2c0 0x43 die id 10: 1000000 uV (0), reg0 0x97 (0)
+[  30.850] rk3588-dvfs: pmic: rk860x i2c1 0x42 die id 10: 800000 uV (0), reg0 0x97 (0)
+[  30.850] rk3588-dvfs: vsweep cpul: 8 points, now 1800 MHz at 950 mV
+[  30.902] rk3588-dvfs: vsweep cpul down 1608 MHz at 850 mV (set 0 in 49 us; rail reads 850 mV (0), clock reads 1608 MHz): cpu4 runs at 1669 MHz
+[  30.945] rk3588-dvfs: vsweep cpul down 1416 MHz at 762 mV (set 0 in 57 us; rail reads 762 mV (0), clock reads 1416 MHz): cpu4 runs at 1463 MHz
+[  30.995] rk3588-dvfs: vsweep cpul down 1200 MHz at 712 mV (set 0 in 55 us; rail reads 712 mV (0), clock reads 1200 MHz): cpu4 runs at 1249 MHz
+[  31.057] rk3588-dvfs: vsweep cpul down 1008 MHz at 675 mV (set 0 in 61 us; rail reads 675 mV (0), clock reads 1008 MHz): cpu4 runs at 989 MHz
+[  31.135] rk3588-dvfs: vsweep cpul down 816 MHz at 675 mV (set 0 in 68 us; rail reads 675 mV (0), clock reads 816 MHz): cpu4 runs at 787 MHz
+[  31.237] rk3588-dvfs: vsweep cpul down 600 MHz at 675 mV (set 0 in 79 us; rail reads 675 mV (0), clock reads 600 MHz): cpu4 runs at 593 MHz
+[  31.391] rk3588-dvfs: vsweep cpul down 408 MHz at 675 mV (set 0 in 98 us; rail reads 675 mV (0), clock reads 408 MHz): cpu4 runs at 395 MHz
+[  31.492] rk3588-dvfs: vsweep cpul up 600 MHz at 675 mV (set 0 in 186 us; rail reads 675 mV (0), clock reads 600 MHz): cpu4 runs at 593 MHz
+[  31.570] rk3588-dvfs: vsweep cpul up 816 MHz at 675 mV (set 0 in 69 us; rail reads 675 mV (0), clock reads 816 MHz): cpu4 runs at 787 MHz
+[  31.632] rk3588-dvfs: vsweep cpul up 1008 MHz at 675 mV (set 0 in 59 us; rail reads 675 mV (0), clock reads 1008 MHz): cpu4 runs at 989 MHz
+[  31.685] rk3588-dvfs: vsweep cpul up 1200 MHz at 712 mV (set 0 in 3596 us; rail reads 712 mV (0), clock reads 1200 MHz): cpu4 runs at 1249 MHz
+[  31.732] rk3588-dvfs: vsweep cpul up 1416 MHz at 762 mV (set 0 in 4366 us; rail reads 762 mV (0), clock reads 1416 MHz): cpu4 runs at 1463 MHz
+[  31.778] rk3588-dvfs: vsweep cpul up 1608 MHz at 850 mV (set 0 in 8275 us; rail reads 850 mV (0), clock reads 1608 MHz): cpu4 runs at 1669 MHz
+[  31.822] rk3588-dvfs: vsweep cpul up 1800 MHz at 950 mV (set 0 in 9405 us; rail reads 950 mV (0), clock reads 1800 MHz): cpu4 runs at 1862 MHz
+[  31.822] rk3588-dvfs: vsweep cpul: done at 1800 MHz, 950 mV
+[  31.822] rk3588-dvfs: vsweep cpub01: 11 points, now 2400 MHz at 1000 mV
+[  31.853] rk3588-dvfs: vsweep cpub01 down 2304 MHz at 1000 mV (set 0 in 1665 us; rail reads 1000 mV (0), clock reads 2304 MHz): cpu0 runs at 2229 MHz
+[  31.884] rk3588-dvfs: vsweep cpub01 down 2208 MHz at 987 mV (set 0 in 1661 us; rail reads 987 mV (0), clock reads 2208 MHz): cpu0 runs at 2206 MHz
+[  31.916] rk3588-dvfs: vsweep cpub01 down 2016 MHz at 925 mV (set 0 in 1669 us; rail reads 925 mV (0), clock reads 2016 MHz): cpu0 runs at 2083 MHz
+[  31.952] rk3588-dvfs: vsweep cpub01 down 1800 MHz at 850 mV (set 0 in 1663 us; rail reads 850 mV (0), clock reads 1800 MHz): cpu0 runs at 1909 MHz
+[  31.992] rk3588-dvfs: vsweep cpub01 down 1608 MHz at 762 mV (set 0 in 1654 us; rail reads 762 mV (0), clock reads 1608 MHz): cpu0 runs at 1671 MHz
+[  32.037] rk3588-dvfs: vsweep cpub01 down 1416 MHz at 725 mV (set 0 in 1677 us; rail reads 725 mV (0), clock reads 1416 MHz): cpu0 runs at 1451 MHz
+[  32.094] rk3588-dvfs: vsweep cpub01 down 1200 MHz at 675 mV (set 0 in 1687 us; rail reads 675 mV (0), clock reads 1200 MHz): cpu0 runs at 1135 MHz
+[  32.161] rk3588-dvfs: vsweep cpub01 down 1008 MHz at 675 mV (set 0 in 1659 us; rail reads 675 mV (0), clock reads 1008 MHz): cpu0 runs at 954 MHz
+[  32.243] rk3588-dvfs: vsweep cpub01 down 816 MHz at 675 mV (set 0 in 1745 us; rail reads 675 mV (0), clock reads 816 MHz): cpu0 runs at 767 MHz
+[  32.399] rk3588-dvfs: vsweep cpub01 down 408 MHz at 675 mV (set 0 in 1793 us; rail reads 675 mV (0), clock reads 408 MHz): cpu0 runs at 395 MHz
+[  32.481] rk3588-dvfs: vsweep cpub01 up 816 MHz at 675 mV (set 0 in 1799 us; rail reads 675 mV (0), clock reads 816 MHz): cpu0 runs at 766 MHz
+[  32.548] rk3588-dvfs: vsweep cpub01 up 1008 MHz at 675 mV (set 0 in 1740 us; rail reads 675 mV (0), clock reads 1008 MHz): cpu0 runs at 954 MHz
+[  32.605] rk3588-dvfs: vsweep cpub01 up 1200 MHz at 675 mV (set 0 in 1682 us; rail reads 675 mV (0), clock reads 1200 MHz): cpu0 runs at 1134 MHz
+[  32.677] rk3588-dvfs: vsweep cpub01 up 1416 MHz at 725 mV (set 0 in 27721 us; rail reads 725 mV (0), clock reads 1416 MHz): cpu0 runs at 1451 MHz
+[  32.736] rk3588-dvfs: vsweep cpub01 up 1608 MHz at 762 mV (set 0 in 21450 us; rail reads 762 mV (0), clock reads 1608 MHz): cpu0 runs at 1671 MHz
+[  32.815] rk3588-dvfs: vsweep cpub01 up 1800 MHz at 850 mV (set 0 in 46437 us; rail reads 850 mV (0), clock reads 1800 MHz): cpu0 runs at 1909 MHz
+[  32.888] rk3588-dvfs: vsweep cpub01 up 2016 MHz at 925 mV (set 0 in 40170 us; rail reads 925 mV (0), clock reads 2016 MHz): cpu0 runs at 2083 MHz
+[  32.951] rk3588-dvfs: vsweep cpub01 up 2208 MHz at 987 mV (set 0 in 33925 us; rail reads 987 mV (0), clock reads 2208 MHz): cpu0 runs at 2206 MHz
+[  32.989] rk3588-dvfs: vsweep cpub01 up 2304 MHz at 1000 mV (set 0 in 8717 us; rail reads 1000 mV (0), clock reads 2304 MHz): cpu0 runs at 2229 MHz
+[  33.021] rk3588-dvfs: vsweep cpub01 up 2400 MHz at 1000 mV (set 0 in 1670 us; rail reads 1000 mV (0), clock reads 2400 MHz): cpu0 runs at 2229 MHz
+[  33.021] rk3588-dvfs: vsweep cpub01: done at 2400 MHz, 1000 mV
+[  33.021] rk3588-dvfs: vsweep cpub23: 11 points, now 2400 MHz at 1000 mV
+[  33.052] rk3588-dvfs: vsweep cpub23 down 2304 MHz at 1000 mV (set 0 in 1665 us; rail reads 1000 mV (0), clock reads 2304 MHz): cpu2 runs at 2223 MHz
+[  33.082] rk3588-dvfs: vsweep cpub23 down 2208 MHz at 987 mV (set 0 in 1663 us; rail reads 987 mV (0), clock reads 2208 MHz): cpu2 runs at 2200 MHz
+[  33.115] rk3588-dvfs: vsweep cpub23 down 2016 MHz at 925 mV (set 0 in 1658 us; rail reads 925 mV (0), clock reads 2016 MHz): cpu2 runs at 2077 MHz
+[  33.150] rk3588-dvfs: vsweep cpub23 down 1800 MHz at 850 mV (set 0 in 1651 us; rail reads 850 mV (0), clock reads 1800 MHz): cpu2 runs at 1904 MHz
+[  33.190] rk3588-dvfs: vsweep cpub23 down 1608 MHz at 762 mV (set 0 in 1649 us; rail reads 762 mV (0), clock reads 1608 MHz): cpu2 runs at 1665 MHz
+[  33.236] rk3588-dvfs: vsweep cpub23 down 1416 MHz at 725 mV (set 0 in 1674 us; rail reads 725 mV (0), clock reads 1416 MHz): cpu2 runs at 1441 MHz
+[  33.293] rk3588-dvfs: vsweep cpub23 down 1200 MHz at 675 mV (set 0 in 1659 us; rail reads 675 mV (0), clock reads 1200 MHz): cpu2 runs at 1129 MHz
+[  33.360] rk3588-dvfs: vsweep cpub23 down 1008 MHz at 675 mV (set 0 in 1705 us; rail reads 675 mV (0), clock reads 1008 MHz): cpu2 runs at 949 MHz
+[  33.443] rk3588-dvfs: vsweep cpub23 down 816 MHz at 675 mV (set 0 in 1713 us; rail reads 675 mV (0), clock reads 816 MHz): cpu2 runs at 760 MHz
+[  33.599] rk3588-dvfs: vsweep cpub23 down 408 MHz at 675 mV (set 0 in 1832 us; rail reads 675 mV (0), clock reads 408 MHz): cpu2 runs at 395 MHz
+[  33.682] rk3588-dvfs: vsweep cpub23 up 816 MHz at 675 mV (set 0 in 1794 us; rail reads 675 mV (0), clock reads 816 MHz): cpu2 runs at 760 MHz
+[  33.749] rk3588-dvfs: vsweep cpub23 up 1008 MHz at 675 mV (set 0 in 1716 us; rail reads 675 mV (0), clock reads 1008 MHz): cpu2 runs at 949 MHz
+[  33.806] rk3588-dvfs: vsweep cpub23 up 1200 MHz at 675 mV (set 0 in 1705 us; rail reads 675 mV (0), clock reads 1200 MHz): cpu2 runs at 1129 MHz
+[  33.878] rk3588-dvfs: vsweep cpub23 up 1416 MHz at 725 mV (set 0 in 27688 us; rail reads 725 mV (0), clock reads 1416 MHz): cpu2 runs at 1441 MHz
+[  33.938] rk3588-dvfs: vsweep cpub23 up 1608 MHz at 762 mV (set 0 in 21445 us; rail reads 762 mV (0), clock reads 1608 MHz): cpu2 runs at 1665 MHz
+[  34.018] rk3588-dvfs: vsweep cpub23 up 1800 MHz at 850 mV (set 0 in 46441 us; rail reads 850 mV (0), clock reads 1800 MHz): cpu2 runs at 1904 MHz
+[  34.089] rk3588-dvfs: vsweep cpub23 up 2016 MHz at 925 mV (set 0 in 40179 us; rail reads 925 mV (0), clock reads 2016 MHz): cpu2 runs at 2077 MHz
+[  34.152] rk3588-dvfs: vsweep cpub23 up 2208 MHz at 987 mV (set 0 in 33355 us; rail reads 987 mV (0), clock reads 2208 MHz): cpu2 runs at 2200 MHz
+[  34.190] rk3588-dvfs: vsweep cpub23 up 2304 MHz at 1000 mV (set 0 in 8715 us; rail reads 1000 mV (0), clock reads 2304 MHz): cpu2 runs at 2223 MHz
+[  34.222] rk3588-dvfs: vsweep cpub23 up 2400 MHz at 1000 mV (set 0 in 1669 us; rail reads 1000 mV (0), clock reads 2400 MHz): cpu2 runs at 2222 MHz
+[  34.222] rk3588-dvfs: vsweep cpub23: done at 2400 MHz, 1000 mV
