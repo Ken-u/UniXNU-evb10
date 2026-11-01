@@ -1,0 +1,42 @@
+## ES8388 and I2S0 on the EVB10: checkpoints 1 and 2 (run a2, `evb10-audio=2`, serial log of the kernel)
+# command: cd uefi-evb10 && EXTRA_KERNEL_ARGS="evb10-audio=2" CAPTURE_SECS=150 tools/xnu-probe/run-kernel.sh a2   (kernel built from fdc202033cc1)
+# Run a1 (`evb10-audio=1`, kernel d45c6ec) printed the same lines up to the write check.
+
+[  27.832] evb10: audio: starting (level 2)
+[  27.842] evb10: audio: CRU sel38 00000004 gate10 00000000 gate11 00000000 (i2c7: 200 MHz, pclk on, clk on)
+[  27.842] evb10: audio: IOC 38 (GPIO1D_L: D0 D1 = I2C7) 00000099 -> 00000099
+[  27.842] evb10: audio: I2C7 version 5, clock 200000000 Hz, SCL 100 kHz, CLKDIV 007c007c
+[  27.895] evb10: audio: I2C7 scan: 1 device(s) answer: 0x11
+[  27.895] evb10: audio: 0x11 answers
+[  27.895] evb10: audio: regs 00: 34 58 f3 ff c0 e8 c3 7b
+[  27.905] evb10: audio: regs 08: 00 00 f8 82 0c 02 30 20
+[  27.905] evb10: audio: regs 10: 00 00 00 c0 05 06 52 18
+[  27.905] evb10: audio: regs 18: 02 02 00 00 08 00 1f f7
+[  27.905] evb10: audio: regs 20: fd ff 1f f7 fd ff 00 b8
+[  27.905] evb10: audio: regs 28: 28 28 b8 80 00 00 1e 1e
+[  27.905] evb10: audio: regs 30: 00 00 00 aa aa
+[  27.905] evb10: audio: register dump: 0 of 53 reads failed
+[  27.905] evb10: audio: write check reg 2e: was 1e, wrote 15 (0), read 15 (0), put back 1e (0), read 1e (0): PASS
+[  27.959] evb10: audio: power domain 38 is on (pwr 00000000 req 00000000 ack 00000ffe idle 00000ffe repair ffff8003 mem 00000000)
+[  27.959] evb10: audio: GPLL 1188000000 Hz, source /4 = 297000000 Hz, fraction 512/12375 -> 12288000 Hz; CLKGATE_CON(7) was 00000000
+[  27.967] evb10: audio: CRU sel24 00000030 sel25 02003057 sel26 00000005 sel28 00000013 gate7 00000000; SYS_GRF 318 000007c7 -> 000007c6
+[  27.967] evb10: audio: IOC 30 (GPIO1C_L: C2 = I2S0_MCLK, C3 = I2S0_SCLK) 00001100 -> 00001100
+[  27.967] evb10: audio: IOC 34 (GPIO1C_H: C5 = I2S0_LRCK, C7 = I2S0_SDO0) 00001010 -> 00001010
+[  27.967] evb10: audio: IOC 3c (GPIO1D_H: D4 = I2S0_SDI0) 00000002 -> 00000002
+[  27.967] evb10: audio: I2S0 found: TXCR 7200000f RXCR 01c8000f CKR 00071f1f CLKDIV 00000707 DMACR 001f0000 INTCR 01f00000 INTSR 00000000 XFER 00000000 TXFIFO 00000000 RXFIFO 00000000
+[  28.020] evb10: audio: I2S0 set up: TXCR 7200000f RXCR 01c8000f CKR 10073f3f CLKDIV 00000303 DMACR 00000000 INTCR 00000000 INTSR 00000000 XFER 00000000 TXFIFO 00000000 RXFIFO 00000000
+[  30.023] evb10: audio: I2S0 after: TXCR 7200000f RXCR 01c8000f CKR 10073f3f CLKDIV 00000303 DMACR 00000000 INTCR 00000000 INTSR 00000000 XFER 00000000 TXFIFO 0000001a RXFIFO 00000002
+[  30.023] evb10: audio: transmit: 96026 words in 2000023 us = 48012 words/s (INTSR 00000000, FIFO level at most 28)
+[  30.023] evb10: audio: receive: 95998 words, 47998 words/s
+[  30.023] evb10: audio: receive low half: min -968 max 8 mean -103 rms-about-mean 236
+[  30.039] evb10: audio: receive high half: min -5 max 787 mean 76 rms-about-mean 188
+
+## What these lines show
+# 27.895  one device answers on I2C7, 0x11; all 53 registers read; the write check passes.
+# 27.959  power domain 38 (audio) is on at the hand-over (repair status bit 19), so the I2S registers can be read.
+# 27.959  GPLL 1188 MHz / 4 = 297 MHz, fraction 512/12375: 12.288 MHz (256 x 48 kHz).
+# 27.967  SYS_GRF 0x318 bit 0 (MCLK to the pin) cleared; the pins were already routed as wanted (IOC lines show the same value before and after).
+# 28.020  I2S0 as the master: CKR TRCM = 1 (transmit-only sync), 64 BCLK per LRCK (0x3f); CLKDIV 4 (BCLK 3.072 MHz).
+# 30.023  transmit 96026 words in 2.000 s = 48012 words/s, INTSR 0 (no underrun, no overrun); receive 95998 words = 47998 words/s.
+#         The receive samples vary within a small range (not all zero, not the transmitted sine): the codec, a slave, is clocked and sends ADC data.
+# Not observed: any sound (the headphone / speaker enable GPIOs are not driven; no person at the board).
