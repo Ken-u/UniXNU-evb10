@@ -78,9 +78,10 @@ trust_cache_sha256 = [
 #   storage    emmc=4 publishes the OS and SystemOS windows of `userdata`; emmc-root-trust, emmc-systemos-union,
 #              emmc-data-mount, emmc-data-size (MiB) and emmc-data-persist=1 keep the Data volume on the card.
 #   cpu        sheng-smp=1 starts the secondary cores (ArmCpu); armcpu-self-ipi=1 and armcpu-mmio-sgi=0 select the IPI
-#              path; wdt-kick keeps the firmware watchdog fed; rk3588-dvfs=6 runs the frequency governor of UniXNU-rk3588-common
-#              (rates and voltages of the three CPU clusters and the DSU; rk3588-dvfs=0 leaves them where the firmware set them: 2.4 GHz
-#              for the Cortex-A76 cores, 1.8 GHz for the Cortex-A55 cores).
+#              path; wdt-kick keeps the firmware watchdog fed; rk3588-dvfs=6 runs the frequency governors of UniXNU-rk3588-common
+#              (rates and voltages of the three CPU clusters and the DSU, an over-temperature limit, and the GPU's clock and voltage;
+#              rk3588-dvfs=0 leaves them where the firmware and the Mali driver set them: 2.4 GHz for the Cortex-A76 cores, 1.8 GHz for the
+#              Cortex-A55 cores, 750 MHz for the GPU; rk3588-gpu=0 leaves only the GPU alone).
 #   display    offline-* and sheng-* arguments are the ones of UniXNU's GOP-backed legacy display; evb10-fb-w/-h give the
 #              kernel's own frame buffer (1072x1904 of the 1080x1920 panel), evb10-vop=2 selects the VOP2 scanout.
 #   input      evb10-touch*, evb10-hid*, sheng-touch-hid.
