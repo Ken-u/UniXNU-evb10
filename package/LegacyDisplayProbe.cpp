@@ -933,6 +933,8 @@ void native_legacy_display_late_probe(void) {
 extern "C" void evb10_touch_start(void);
 // package/Evb10Wifi: the Wi-Fi module's SDIO host and its identity probe (evb10-wifi=1).
 extern "C" void evb10_wifi_start(void);
+// package/Evb10Audio: the audio codec's I2C bus and registers (evb10-audio=1).
+extern "C" void evb10_audio_start(void);
 // package/Mali: the Mali-G610 bring-up (mali=<milestone>).
 extern "C" void mali_start(void);
 static void legacy_late_probe_body(void) {
@@ -940,6 +942,7 @@ static void legacy_late_probe_body(void) {
     evb10_hid_load();
     evb10_touch_start();
     evb10_wifi_start();
+    evb10_audio_start();
     mali_start();
     IOService *display=pendingLegacyDisplay;if(!display)return;pendingLegacyDisplay=nullptr;
     native_legacy_surface_status=OSKextLoadKextWithIdentifier("com.apple.iokit.IOSurface");
