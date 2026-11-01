@@ -23,8 +23,12 @@ ws/
 2. UEFI: `uefi-evb10/build.sh`. Scrub `PATH`/Python variables that point at another toolchain first (pyelftools).
 3. GPU user stack, in this order: `MaliMetal/mesa-build/*` (LLVM, SPIRV, libclc, libdrm, host and iOS Mesa) ->
    metal2vulkan + `metal-plugin/m2v-patches/apply.sh` -> `metal-plugin/build-bridge.sh` -> `usertest/build.sh` ->
-   `metal-plugin/build-plugin.sh` -> `usertest/build.sh` again (picks up the plugin cdhash) -> rebuild the kernel.
-4. `uefi-evb10/tools/xnu-probe/run-kernel.sh TAG` repacks the payload (`make-payload-boot.sh`) and boots the board.
+   `metal-plugin/build-plugin.sh` -> `scripts/build-evb10-audio-hal.py` (this repository: the audio server plug-in, and its
+   `out/audio/audio.addon`) -> `usertest/build.sh` again (picks up the plugin and audio plug-in cdhashes) -> rebuild the kernel.
+   The audio plug-in needs `LLVM_BIN` and `IOS_SDK` (the environment, or `../MaliMetal/.env`) and fetches Apple's CoreAudio
+   headers once (macOS 11.3 SDK mirror, sha256-pinned) into `.cache/coreaudio-headers`.
+4. `uefi-evb10/tools/xnu-probe/run-kernel.sh TAG` repacks the payload (`make-payload-boot.sh`, which merges
+   `out/audio/audio.addon` into the GPU addon while `board.toml` has `evb10-audio-hal=1`) and boots the board.
 
 ## Things that bite
 

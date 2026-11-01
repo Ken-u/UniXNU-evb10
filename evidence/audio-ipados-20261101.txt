@@ -1,0 +1,182 @@
+# evb10 audio for iPadOS: the audio service, the audio server's plug-in and PCM from iPadOS into the I2S0 transmit FIFO. 2026-11-01, evb10-audio=4 evb10-audio-hal=1
+# Observed on the board over the serial line (runs aud1, aud2, aud3, aud4); the log lines are copied unchanged. Nobody was at the board and nobody listened:
+# what is shown is the kernel's accounting of the frames it put into the I2S0 FIFO, not sound. The sound that played was the keyboard clicks of the scripted
+# touches that type the Wi-Fi password (evb10-touch-script=99, as in evidence/wifi-settings-pane-20261031.txt), never a tone made for the test.
+
+## The engine alone: the service drives itself for 10 s (evb10-audio-selftest=10), a 480 Hz triangle through the rings (run aud1; the statistics line was cut by the kernel printf at about 500 characters, later split in two)
+[  27.963] evb10: audio: timebase 125/3, 500.000 host ticks per frame, rings of 65536 frames (262144 + 131072 bytes)
+[  27.999] evb10: audio: service "Evb10Audio" registered, sandbox grant: audiomxd,mediaserverd; output by the headphone detect, volume 28, hardware stays on 3000 ms after the last stop
+[  29.994] evb10: audio: self-test: 10 s of a 480 Hz triangle (amplitude 8000) through the rings
+[  29.994] evb10: audio: request 0 (start output), wanted now 0x1
+[  30.130] evb10: audio: headphone detect GPIO1_C4 reads 0: a plug is in, the headphone output is used
+[  30.165] evb10: audio: hardware on: headphone amplifier on, speaker amplifier off, output volume 28
+[  30.165] evb10: audio: request 2 (start input), wanted now 0x3
+[  35.162] evb10: audio: running: 21858 ticks, longest gap 232 us, gaps <300/<600/<1000/<2000/<5000/more us: 21857 0 0 0 0 0; transmit 239985 frames, receive 239980 frames; underruns 0, overruns 0, FIFO ran dry 0 times (0 frames skipped); levels at tick (low/high/su ⏎
+[  40.175] evb10: audio: running: 43707 ticks, longest gap 2144 us, gaps <300/<600/<1000/<2000/<5000/more us: 43705 0 0 0 1 0; transmit 479902 frames, receive 479900 frames; underruns 0, overruns 0, FIFO ran dry 1 times (75 frames skipped); levels at tick (low/high/evb10: audio: request 1 (stop output), wanted now 0x2
+[  40.175] evb10: audio: request 3 (stop input), wanted now 0
+[  40.175] evb10: audio: self-test done: 591198 frames written into the ring
+[  43.218] evb10: audio: hardware off: 56863 ticks, longest gap 2144 us, gaps <300/<600/<1000/<2000/<5000/more us: 56860 0 0 0 2 0; transmit 624459 frames, receive 624460 frames; underruns 0, overruns 0, FIFO ran dry 2 times (150 frames skipped); levels at tick (low ⏎
+
+## iPadOS (run aud3, evb10-audio=4 evb10-audio-hal=1 evb10-wifi=5 evb10-wifi-join=2 evb10-touch-script=99): the plug-in is mounted, audiomxd opens the service, the first sound starts the hardware
+[  27.987] evb10: audio: timebase 125/3, 500.000 host ticks per frame, rings of 65536 frames (262144 + 131072 bytes)
+[  28.010] evb10: audio: service "Evb10Audio" registered, sandbox grant: audiomxd,mediaserverd; output by the headphone detect, volume 28, hardware stays on 3000 ms after the last stop
+[  30.912] evb10: addon: 5 file(s): 1 written, 4 already in place, 0 failed: 0
+[  30.912] evb10: audio hal: mounted over /System/Library/Audio/Plug-Ins/HAL: stage 5 status 0 (5 = Evb10Audio.driver visible next to the sealed plug-ins)
+[  78.310] evb10: audio: audiomxd opens the service
+[  78.421] evb10: audio: the audio server loaded the plug-in (1 time(s))
+[  81.677] evb10: audio: [props] unanswered property 'cfsz' of object 2, scope 'g'
+[ 233.140] evb10: audio: request 0 (start output), wanted now 0x1
+[ 233.272] evb10: audio: headphone detect GPIO1_C4 reads 0: a plug is in, the headphone output is used
+[ 233.309] evb10: audio: hardware on: headphone amplifier on, speaker amplifier off, output volume 28
+[ 241.367] evb10: audio: the audio server set the output volume to 225/1000 (1 times)
+[ 267.587] evb10: audio: request 0 (start output), wanted now 0x1
+[ 267.711] evb10: audio: request 0 (start output), wanted now 0x1
+
+## The same run, the statistics of the hardware and of the plug-in while the keyboard clicks played (5 s apart; peaks out are 16 bit magnitudes after the volume; "FIFO ran dry" counts times the thread found the wire past its next frame)
+[ 233.923] evb10: audio: running: transmit 30306 frames, receive 30301 frames; underruns 0, overruns 0, FIFO ran dry 0 times (0 frames skipped); FIFO level at a tick 17..20; peaks out 0 in 45
+[ 233.923] evb10: audio: plug-in: 27 writes of 1024 frames (27648 frames in all); write-ahead 1935..2047 frames, read-behind 0..0; mix peak 0, input misses 0; cycle intervals <15/<25/<40/<80/<160/more ms: 0 26 0 0 0 0
+[ 233.940] evb10: audio: plug-in: overlaps 0 (most 0 frames), skipped stretches 0 (0 frames); IO thread priority 97 (base 97, lowest 97), time constraint 1 (period 512000); host clock 24000000 Hz (lookup 0)
+[ 238.941] evb10: audio: running: 24656 ticks, longest gap 245 us, gaps <300/<600/<1000/<2000/<5000/more us: 24655 0 0 0 0 0
+[ 238.941] evb10: audio: running: transmit 271186 frames, receive 271181 frames; underruns 0, overruns 0, FIFO ran dry 0 times (0 frames skipped); FIFO level at a tick 17..20; peaks out 0 in 68
+[ 238.941] evb10: audio: plug-in: 263 writes of 1024 frames (269312 frames in all); write-ahead 1935..2049 frames, read-behind 0..0; mix peak 0, input misses 0; cycle intervals <15/<25/<40/<80/<160/more ms: 0 262 0 0 0 0
+[ 238.958] evb10: audio: plug-in: overlaps 0 (most 0 frames), skipped stretches 0 (0 frames); IO thread priority 97 (base 97, lowest 97), time constraint 1 (period 512000); host clock 24000000 Hz (lookup 0)
+[ 243.965] evb10: audio: running: 46566 ticks, longest gap 3962 us, gaps <300/<600/<1000/<2000/<5000/more us: 46564 0 0 0 1 0
+[ 243.965] evb10: audio: running: transmit 512168 frames, receive 512166 frames; underruns 0, overruns 0, FIFO ran dry 1 times (162 frames skipped); FIFO level at a tick 16..20; peaks out 727 in 73
+[ 243.965] evb10: audio: plug-in: 497 writes of 1024 frames (509440 frames in all); write-ahead 1531..2049 frames, read-behind 0..0; mix peak 8748, input misses 0; cycle intervals <15/<25/<40/<80/<160/more ms: 0 495 1 0 0 0
+[ 243.982] evb10: audio: plug-in: overlaps 0 (most 0 frames), skipped stretches 1 (228 frames); IO thread priority 97 (base 97, lowest 97), time constraint 1 (period 512000); host clock 24000000 Hz (lookup 0)
+[ 248.984] evb10: audio: running: 68479 ticks, longest gap 3962 us, gaps <300/<600/<1000/<2000/<5000/more us: 68477 0 0 0 1 0
+[ 248.984] evb10: audio: running: transmit 753063 frames, receive 753060 frames; underruns 0, overruns 0, FIFO ran dry 1 times (162 frames skipped); FIFO level at a tick 14..20; peaks out 727 in 90
+[ 248.984] evb10: audio: plug-in: 733 writes of 1024 frames (751104 frames in all); write-ahead 1531..2049 frames, read-behind 0..0; mix peak 8748, input misses 0; cycle intervals <15/<25/<40/<80/<160/more ms: 0 731 1 0 0 0
+[ 249.001] evb10: audio: plug-in: overlaps 0 (most 0 frames), skipped stretches 1 (228 frames); IO thread priority 97 (base 97, lowest 97), time constraint 1 (period 512000); host clock 24000000 Hz (lookup 0)
+[ 253.999] evb10: audio: running: 90373 ticks, longest gap 3962 us, gaps <300/<600/<1000/<2000/<5000/more us: 90370 0 0 0 2 0
+[ 254.002] evb10: audio: running: transmit 993782 frames, receive 993784 frames; underruns 0, overruns 0, FIFO ran dry 2 times (315 frames skipped); FIFO level at a tick 17..20; peaks out 727 in 90
+[ 254.002] evb10: audio: plug-in: 968 writes of 1024 frames (991744 frames in all); write-ahead 1531..2049 frames, read-behind 0..0; mix peak 8748, input misses 0; cycle intervals <15/<25/<40/<80/<160/more ms: 0 966 1 0 0 0
+[ 254.020] evb10: audio: plug-in: overlaps 0 (most 0 frames), skipped stretches 1 (228 frames); IO thread priority 97 (base 97, lowest 97), time constraint 1 (period 512000); host clock 24000000 Hz (lookup 0)
+[ 259.022] evb10: audio: running: 112304 ticks, longest gap 3962 us, gaps <300/<600/<1000/<2000/<5000/more us: 112301 0 0 0 2 0
+[ 259.022] evb10: audio: running: transmit 1234820 frames, receive 1234821 frames; underruns 0, overruns 0, FIFO ran dry 2 times (315 frames skipped); FIFO level at a tick 17..20; peaks out 727 in 90
+[ 259.041] evb10: audio: plug-in: 1203 writes of 1024 frames (1232384 frames in all); write-ahead 1531..2049 frames, read-behind 0..0; mix peak 8748, input misses 0; cycle intervals <15/<25/<40/<80/<160/more ms: 0 1201 1 0 0 0
+[ 259.041] evb10: audio: plug-in: overlaps 0 (most 0 frames), skipped stretches 1 (228 frames); IO thread priority 97 (base 97, lowest 97), time constraint 1 (period 512000); host clock 24000000 Hz (lookup 0)
+[ 264.042] evb10: audio: running: 134203 ticks, longest gap 3962 us, gaps <300/<600/<1000/<2000/<5000/more us: 134199 0 0 0 3 0
+[ 264.042] evb10: audio: running: transmit 1475511 frames, receive 1475515 frames; underruns 0, overruns 0, FIFO ran dry 3 times (471 frames skipped); FIFO level at a tick 16..20; peaks out 727 in 90
+[ 264.042] evb10: audio: plug-in: 1438 writes of 1024 frames (1473024 frames in all); write-ahead 1531..2049 frames, read-behind 0..0; mix peak 8748, input misses 0; cycle intervals <15/<25/<40/<80/<160/more ms: 0 1436 1 0 0 0
+[ 264.048] evb10: audio: plug-in: overlaps 0 (most 0 frames), skipped stretches 1 (228 frames); IO thread priority 97 (base 97, lowest 97), time constraint 1 (period 512000); host clock 24000000 Hz (lookup 0)
+[ 269.058] evb10: audio: running: 156069 ticks, longest gap 3962 us, gaps <300/<600/<1000/<2000/<5000/more us: 156065 0 0 0 3 0
+[ 269.058] evb10: audio: running: transmit 1716272 frames, receive 1716277 frames; underruns 0, overruns 0, FIFO ran dry 3 times (471 frames skipped); FIFO level at a tick 15..20; peaks out 727 in 90
+[ 269.058] evb10: audio: plug-in: 1572 writes of 1024 frames (1610240 frames in all); write-ahead 1531..2049 frames, read-behind 0..0; mix peak 8748, input misses 0; cycle intervals <15/<25/<40/<80/<160/more ms: 0 1568 1 0 1 1
+[ 269.062] evb10: audio: plug-in: overlaps 0 (most 0 frames), skipped stretches 2 (5156 frames); IO thread priority 97 (base 97, lowest 97), time constraint 1 (period 512000); host clock 24000000 Hz (lookup 0)
+[ 272.709] connectx() - failed necp_set_socket_domain_attributesevb10: audio: hardware off: 171906 ticks, longest gap 4148 us, gaps <300/<600/<1000/<2000/<5000/more us: 171901 0 0 0 4 0
+[ 272.768] evb10: audio: hardware off: transmit 1890782 frames, receive 1890791 frames; underruns 0, overruns 0, FIFO ran dry 4 times (643 frames skipped); FIFO level at a tick 15..20; peaks out 727 in 90
+[ 274.083] evb10: audio: plug-in: 1602 writes of 1024 frames (1640960 frames in all); write-ahead 1531..2049 frames, read-behind 0..0; mix peak 8748, input misses 0; cycle intervals <15/<25/<40/<80/<160/more ms: 0 1598 1 0 1 1
+[ 274.083] evb10: audio: plug-in: overlaps 0 (most 0 frames), skipped stretches 2 (5156 frames); IO thread priority 97 (base 97, lowest 97), time constraint 1 (period 512000); host clock 24000000 Hz (lookup 0)
+
+## The audio server's first look at the device (run aud3, the trace of its property reads in order; "kind 4, failed" are failing HAL calls of its own routing layer on its own objects, kind 0 reads and kind 1 writes of this plug-in)
+[  78.421] evb10: audio: [trace 0] selector 'cust' (63757374) object 1 scope 'g' kind 0
+[  78.422] evb10: audio: [trace 1] selector 'dev#' (64657623) object 1 scope 'g' kind 0
+[  78.422] evb10: audio: [trace 2] selector 'clas' (636c6173) object 2 scope 'g' kind 0
+[  78.422] evb10: audio: [trace 3] selector 'uid ' (75696420) object 2 scope 'g' kind 0
+[  78.422] evb10: audio: [trace 4] selector 'stm#' (73746d23) object 2 scope 'o' kind 0
+[  78.422] evb10: audio: [trace 5] selector 'stm#' (73746d23) object 2 scope 'i' kind 0
+[  78.425] evb10: audio: [trace 6] selector 'pfta' (70667461) object 3 scope 'g' kind 0
+[  78.425] evb10: audio: [trace 7] selector 'cust' (63757374) object 3 scope 'g' kind 0
+[  78.425] evb10: audio: [trace 8] selector 'pfta' (70667461) object 4 scope 'g' kind 0
+[  78.425] evb10: audio: [trace 9] selector 'cust' (63757374) object 4 scope 'g' kind 0
+[  78.425] evb10: audio: [trace 10] selector 'ctrl' (6374726c) object 2 scope 'g' kind 0
+[  78.425] evb10: audio: [trace 11] selector 'clas' (636c6173) object 5 scope 'g' kind 0
+[  78.429] evb10: audio: [trace 12] selector 'bcls' (62636c73) object 5 scope 'g' kind 0
+[  78.429] evb10: audio: [trace 13] selector 'cscp' (63736370) object 5 scope 'g' kind 0
+[  78.429] evb10: audio: [trace 14] selector 'celm' (63656c6d) object 5 scope 'g' kind 0
+[  78.429] evb10: audio: [trace 15] selector 'cust' (63757374) object 5 scope 'g' kind 0
+[  78.429] evb10: audio: [trace 16] selector 'nsrt' (6e737274) object 2 scope 'g' kind 0
+[  78.429] evb10: audio: [trace 17] selector 'ring' (72696e67) object 2 scope 'g' kind 0
+[  78.429] evb10: audio: [trace 18] selector 'saft' (73616674) object 2 scope 'o' kind 0
+[  78.433] evb10: audio: [trace 19] selector 'saft' (73616674) object 2 scope 'i' kind 0
+[  78.433] evb10: audio: [trace 20] selector 'ltnc' (6c746e63) object 2 scope 'o' kind 0
+[  78.448] evb10: audio: [trace 21] selector 'ltnc' (6c746e63) object 2 scope 'i' kind 0
+[  78.448] evb10: audio: [trace 22] selector 'clok' (636c6f6b) object 2 scope 'g' kind 0
+[  78.448] evb10: audio: [trace 23] selector 'cstb' (63737462) object 2 scope 'g' kind 0
+[  78.448] evb10: audio: [trace 24] selector 'tran' (7472616e) object 2 scope 'g' kind 0
+[  78.451] evb10: audio: [trace 25] selector 'schn' (7363686e) object 3 scope 'g' kind 0
+[  78.451] evb10: audio: [trace 26] selector 'pft ' (70667420) object 3 scope 'g' kind 0
+[  78.451] evb10: audio: [trace 27] selector 'term' (7465726d) object 3 scope 'g' kind 0
+[  78.451] evb10: audio: [trace 28] selector 'taps' (74617073) object 4 scope 'g' kind 0
+[  78.451] evb10: audio: [trace 29] selector 'schn' (7363686e) object 4 scope 'g' kind 0
+[  78.451] evb10: audio: [trace 30] selector 'pft ' (70667420) object 4 scope 'g' kind 0
+[  78.467] evb10: audio: [trace 31] selector 'term' (7465726d) object 4 scope 'g' kind 0
+[  78.671] evb10: audio: [trace 32] selector 'cust' (63757374) object 2 scope 'g' kind 0
+[  78.672] evb10: audio: [trace 33] selector 'clkd' (636c6b64) object 2 scope 'g' kind 0
+[  78.672] evb10: audio: [trace 34] selector 'accs' (61636373) object 2 scope 'g' kind 0
+[  78.672] evb10: audio: [trace 35] selector 'hidn' (6869646e) object 2 scope 'g' kind 0
+[  78.672] evb10: audio: [trace 36] selector 'box#' (626f7823) object 1 scope 'g' kind 0
+[  78.672] evb10: audio: [trace 37] selector 'clk#' (636c6b23) object 1 scope 'g' kind 0
+[  79.785] skip attaching fsw to en0 using legacy TX modelskip attaching fsw to en0 using legacy TX modelevb10: audio: [trace 38] selector 'dflt' (64666c74) object 2 scope 'i' kind 0
+[  79.879] evb10: audio: [trace 39] selector 'dflt' (64666c74) object 2 scope 'o' kind 0
+[  79.879] evb10: audio: [trace 40] selector 'sflt' (73666c74) object 2 scope 'o' kind 0
+[  79.879] evb10: audio: [trace 41] selector 'auto' (6175746f) object 2 scope 'g' kind 0
+[  80.080] evb10: audio: [trace 42] selector 'taps' (74617073) object 59 scope 'g' kind 4, failed
+[  81.677] evb10: audio: [trace 43] selector 'dac3' (64616333) object 58 scope 'g' kind 4, failed
+[  81.677] evb10: audio: [trace 44] selector 'mtb+' (6d74622b) object 58 scope 'g' kind 4, failed
+[  81.677] evb10: audio: [trace 45] selector 'mtc+' (6d74632b) object 58 scope 'g' kind 4, failed
+[  81.677] evb10: audio: [trace 46] selector 'shsp' (73687370) object 58 scope 'g' kind 4, failed
+[  81.677] evb10: audio: [trace 47] selector 'srcs' (73726373) object 58 scope 'i' kind 4, failed
+[  81.680] evb10: audio: [trace 48] selector 'dsts' (64737473) object 58 scope 'o' kind 4, failed
+[  81.680] evb10: audio: [trace 49] selector 'vcdt' (76636474) object 58 scope 'g' kind 4, failed
+[  81.681] evb10: audio: [trace 50] selector 'vcdr' (76636472) object 58 scope 'g' kind 4, failed
+[  81.681] evb10: audio: [trace 51] selector 'thsr' (74687372) object 58 scope 'g' kind 4, failed
+[  81.681] evb10: audio: [trace 52] selector 'ThBw' (54684277) object 58 scope 'o' kind 4, failed
+[  81.681] evb10: audio: [trace 53] selector 'avta' (61767461) object 58 scope 'g' kind 4, failed
+[  81.684] evb10: audio: [trace 54] selector 'avtc' (61767463) object 58 scope 'g' kind 4, failed
+[  81.684] evb10: audio: [trace 55] selector 'avte' (61767465) object 58 scope 'g' kind 4, failed
+[  81.684] evb10: audio: [trace 56] selector 'avto' (6176746f) object 58 scope 'g' kind 4, failed
+[  81.684] evb10: audio: [trace 57] selector 'aolg' (616f6c67) object 58 scope 'g' kind 4, failed
+[  81.684] evb10: audio: [trace 58] selector 'saci' (73616369) object 58 scope 'g' kind 4, failed
+[  81.684] evb10: audio: [trace 59] selector 'advl' (6164766c) object 58 scope 'g' kind 4, failed
+[  81.688] evb10: audio: [trace 60] selector 'btpt' (62747074) object 58 scope 'g' kind 4, failed
+[  81.688] evb10: audio: [trace 61] selector 'taps' (74617073) object 36 scope 'g' kind 4, failed
+[  81.688] evb10: audio: [trace 62] selector 'mute' (6d757465) object 35 scope 'o' kind 4, failed
+[  81.688] evb10: audio: [trace 63] selector 'lcdr' (6c636472) object 5 scope 'g' kind 0
+[  81.688] evb10: audio: [trace 64] selector 'lnam' (6c6e616d) object 2 scope 'g' kind 0
+[  81.692] evb10: audio: [trace 65] selector 'rsrc' (72737263) object 1 scope 'g' kind 0
+[  81.692] evb10: audio: [trace 66] selector 'ssc#' (73736323) object 35 scope 'o' kind 4, failed
+[  81.692] evb10: audio: [trace 67] selector 'vold' (766f6c64) object 35 scope 'i' kind 4, failed
+[  81.692] evb10: audio: [trace 68] selector 'ssc#' (73736323) object 35 scope 'i' kind 4, failed
+[  81.692] evb10: audio: [trace 69] selector 'taps' (74617073) object 52 scope 'g' kind 4, failed
+[  81.692] evb10: audio: [trace 70] selector 'shsp' (73687370) object 35 scope 'g' kind 4, failed
+[  81.695] evb10: audio: [trace 71] selector 'cfsz' (6366737a) object 2 scope 'g' kind 0, failed
+[  81.695] evb10: audio: [trace 72] selector 'sact' (73616374) object 3 scope 'g' kind 1
+[  81.695] evb10: audio: [trace 73] selector 'sact' (73616374) object 4 scope 'g' kind 1
+[  81.696] evb10: audio: [trace 74] selector 'dac3' (64616333) object 35 scope 'g' kind 4, failed
+[  81.696] evb10: audio: [trace 75] selector 'mtb+' (6d74622b) object 35 scope 'g' kind 4, failed
+[  81.696] evb10: audio: [trace 76] selector 'mtc+' (6d74632b) object 35 scope 'g' kind 4, failed
+[  81.699] evb10: audio: [trace 77] selector 'vcen' (7663656e) object 35 scope 'o' kind 4, failed
+[  81.699] evb10: audio: [trace 78] selector 'srcs' (73726373) object 35 scope 'i' kind 4, failed
+[  81.699] evb10: audio: [trace 79] selector 'dsts' (64737473) object 35 scope 'o' kind 4, failed
+[  81.699] evb10: audio: [trace 80] selector 'vcdt' (76636474) object 35 scope 'g' kind 4, failed
+[  81.699] evb10: audio: [trace 81] selector 'vcdr' (76636472) object 35 scope 'g' kind 4, failed
+[  81.699] evb10: audio: [trace 82] selector 'thsr' (74687372) object 35 scope 'g' kind 4, failed
+[  81.703] evb10: audio: [trace 83] selector 'ThBw' (54684277) object 35 scope 'o' kind 4, failed
+[  81.703] evb10: audio: [trace 84] selector 'avta' (61767461) object 35 scope 'g' kind 4, failed
+[  81.703] evb10: audio: [trace 85] selector 'avtc' (61767463) object 35 scope 'g' kind 4, failed
+[  81.703] evb10: audio: [trace 86] selector 'avte' (61767465) object 35 scope 'g' kind 4, failed
+[  81.703] evb10: audio: [trace 87] selector 'avto' (6176746f) object 35 scope 'g' kind 4, failed
+[  81.707] evb10: audio: [trace 88] selector 'aolg' (616f6c67) object 35 scope 'g' kind 4, failed
+[  81.707] evb10: audio: [trace 89] selector 'saci' (73616369) object 35 scope 'g' kind 4, failed
+[  81.707] evb10: audio: [trace 90] selector 'advl' (6164766c) object 35 scope 'g' kind 4, failed
+[  81.707] evb10: audio: [trace 91] selector 'divc' (64697663) object 35 scope 'o' kind 4, failed
+[  81.707] evb10: audio: [trace 92] selector 'vcsp' (76637370) object 35 scope 'o' kind 4, failed
+[  81.707] evb10: audio: [trace 93] selector '?vls' (3f766c73) object 35 scope 'o' kind 4, failed
+[  81.725] evb10: audio: [trace 94] selector 'btpt' (62747074) object 35 scope 'g' kind 4, failed
+[  81.725] evb10: audio: [trace 95] selector 'srnd' (73726e64) object 2 scope 'o' kind 0
+[  81.725] evb10: audio: [trace 96] selector 'parr' (70617272) object 35 scope 'g' kind 4, failed
+[  81.725] evb10: audio: [trace 97] selector 'parr' (70617272) object 58 scope 'g' kind 4, failed
+[  81.928] evb10: audio: [trace 98] selector 'TTs#' (54547323) object 35 scope 'o' kind 4, failed
+[  81.928] evb10: audio: [trace 99] selector 'TTs#' (54547323) object 58 scope 'o' kind 4, failed
+[  81.928] evb10: audio: [trace 100] selector 'ltnc' (6c746e63) object 3 scope 'g' kind 0
+[  95.376] evb10: audio: [trace 101] selector '???' (0005a384) object 0 scope 'g' kind 8, failed
+[  95.376] evb10: audio: [trace 102] selector '??,' (0005952c) object 0 scope 'g' kind 8, failed
+[ 241.367] evb10: audio: [trace 103] selector 'swen' (7377656e) object 35 scope 'g' kind 4, failed
+[ 241.367] evb10: audio: [trace 104] selector 'lcdv' (6c636476) object 5 scope 'g' kind 0
+[ 241.367] evb10: audio: [trace 105] selector 'lcdv' (6c636476) object 5 scope 'g' kind 1
+
+## What went wrong first (run aud2): the engine thread printed the statistics and the 106 trace lines itself, and a kernel printf takes about 0.7 ms a line at 1.5 Mbaud
+[ 238.572] evb10: audio: running: 21520 ticks, longest gap 68264 us, gaps <300/<600/<1000/<2000/<5000/more us: 21518 0 0 0 0 1
+[ 243.572] evb10: audio: running: 43294 ticks, longest gap 68264 us, gaps <300/<600/<1000/<2000/<5000/more us: 43285 1 4 0 2 1

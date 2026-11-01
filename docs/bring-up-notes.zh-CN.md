@@ -96,7 +96,11 @@
   手势开头的重帧、频率固定（GPU 不调频，CPU 频率未管理）。
 - GPU 完成走轮询，没有中断；一个进程最多八个 group。
 - Wi-Fi：数据通路是轮询的 SDIO（约 25 MHz，无 DMA、无中断），下载峰值约 34 Mbit/s；「设置」里的 Wi-Fi 页用脚本化触摸验过列表、输密码加入、状态、忘记网络（坑 20–24）。**5 GHz 不行**（见坑 25）；开放网络、WPA3、隐藏网络、重启后是否记得网络、没带 `evb10-wifi=N` 的默认启动没试。
-- 音频：内核侧做到了检查点 2（`evb10-audio=2`，`docs/audio.md`）：I2C7 上 ES8388 在 0x11 应答、53 个寄存器能读、写回读一致；I2S0 做主，12.288 MHz 的 MCLK 来自 GPLL，
-  发送 FIFO 48012 字/秒、接收 FIFO 47998 字/秒，无欠载、无 panic（板上 `a2`）。**没人听过**（耳机、喇叭的使能脚没驱动，也没人在板边）；接收到的值不是全 0、也不是发出的正弦，
-  内容没分析。还没接到 iPadOS：缺内核音频服务和 CoreAudio 的 HAL 插件，也没用 DMA 和中断。视频编解码没动（iPadOS 走 `AppleAVDUserClient`，这个内核没有）。
+- 音频：接到 iPadOS 了（`docs/audio.md`，`evb10-audio=4` + `evb10-audio-hal=1`，默认开）。内核侧：I2C7 上 ES8388 在 0x11 应答；I2S0 做主，12.288 MHz 的 MCLK 来自 GPLL，48 kHz；
+  内核服务 `Evb10Audio`（`audiomxd` 打开它）+ 音频服务器插件（`hal/Evb10AudioPlugIn.c`，打包进 GPU addon，bindfs union 挂在 `/System/Library/Audio/Plug-Ins/HAL` 上，cdhash 进 owner trust cache）。
+  板上（`evidence/audio-ipados-20261101.txt`，`aud1`–`aud3`）：音频服务器加载插件、读设备属性、设音量、起 IO（线程优先级 97，每 21 ms 提前 1531–2049 帧写 1024 帧）；
+  脚本化触摸输密码的键盘点击声让发送 FIFO 在 48 kHz 下收到 1890782 帧（混音峰值 8748，音量 −21.6 dB 后进 FIFO 的最大样本 727），接收 FIFO 同速，无 panic。
+  **没人听过**：耳机检测脚读 0（不知道有没有插东西，所以走了耳机功放，`evb10-audio-out=3` 两个都开）、爆音、音量曲线、录音质量都没人确认；只播过键盘点击声。
+  **还有掉帧**：FIFO 靠一个轮询线程喂（32 字 = 667 µs），内核调度停顿超过 0.7 ms 就丢帧：39 秒里 4 次共 13 ms。教训：这个线程自己打印串口日志（0.7 ms 一行）一次停了 68 ms，日志已搬到别的线程。
+  下一步：有人听一下（`evb10-audio-selftest=10` 不用 iPadOS 也能出一段三角波），然后上 DMA。视频编解码没动（iPadOS 走 `AppleAVDUserClient`，这个内核没有）。
 - 电源管理不在当前范围。
