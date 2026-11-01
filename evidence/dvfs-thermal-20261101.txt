@@ -1,0 +1,157 @@
+## Temperature sensors (TSADC) on the EVB10: bring-up, an idle comparison with and without the governor, and the over-temperature limit (runs tb1, tg1, gt33; serial logs of the kernel)
+# tb1: cd uefi-evb10 && EXTRA_KERNEL_ARGS="rk3588-dvfs=7" CAPTURE_SECS=600 EARLY_STOP=0 tools/xnu-probe/run-kernel.sh tb1   (the governor only watches: the clocks stay where the firmware left them)
+# tg1: the same with EXTRA_KERNEL_ARGS="rk3588-dvfs=6" (the governor)
+# gt33: CAPTURE_SECS=235, EXTRA_KERNEL_ARGS="evb10-touch-demo=120 mali-timeline=1 rk3588-dvfs-tmax=33" (the limit set just above the idle temperature, so that the scripted swipes reach it)
+# The firmware leaves the TSADC clocked and out of reset but not sampling (AUTO_CON = 0); the kernel switches the sampling on and reads the seven channels (soc, the two A76 pairs, the A55 cores,
+# the SoC centre, the GPU, the NPU). One code step is 0.93 C. The board has a heat sink; the idle temperature is 30 C and the difference between the two idle runs (0.4 C) is smaller than the
+# difference between their starting temperatures (31.4 and 30.5 C), so temperature does not resolve what the governor saves: the log carries a model of the cores power instead.
+# (The kernel of tb1 and tg1 had a touch boost default of 1000 ms and no GPU governor; that of gt33 had the GPU governor too, and the same boost default.)
+
+== tb1: controller state at start, first reading
+[  30.845] rk3588-dvfs: thermal: CRU sel41 0000030b gate12 00000000 softrst12 00000000 (pclk on, clk on, reset released released)
+[  30.845] rk3588-dvfs: thermal: tsadc user 00000000 auto 00000000 src 00000000 ht-int-en 00000000 shut-gpio 00000000 shut-cru 00000000 period 65536
+[  30.854] rk3588-dvfs: thermal: init 0
+[  30.854] rk3588-dvfs: thermal: start: soc 31.4 big0 31.4 big1 31.4 little 31.4 center 31.4 gpu 31.4 npu 31.4 C
+
+== tb1: mean over the 3000 samples taken after 200 s of the 600 s run: 30.04 C
+== tg1: mean over the 2964 samples taken after 200 s of the 600 s run: 29.64 C
+
+== tb1 (watching only): the ten-second temperature lines
+[  40.903] rk3588-dvfs: gov temp: soc 31.4 big0 31.4 big1 32.3 little 31.4 center 31.4 gpu 31.4 npu 31.4 C; mean of 73 samples 31.57 C, highest seen 32.3 C, throttle step 0, 0% of the time throttled
+[  50.916] rk3588-dvfs: gov temp: soc 31.4 big0 32.3 big1 32.3 little 31.4 center 31.4 gpu 30.5 npu 30.5 C; mean of 74 samples 31.47 C, highest seen 32.3 C, throttle step 0, 0% of the time throttled
+[  60.923] rk3588-dvfs: gov temp: soc 31.4 big0 31.4 big1 31.4 little 31.4 center 31.4 gpu 30.5 npu 30.5 C; mean of 74 samples 31.54 C, highest seen 32.3 C, throttle step 0, 0% of the time throttled
+[  70.929] rk3588-dvfs: gov temp: soc 32.3 big0 33.3 big1 33.3 little 32.3 center 31.4 gpu 31.4 npu 31.4 C; mean of 73 samples 31.73 C, highest seen 34.2 C, throttle step 0, 0% of the time throttled
+[  80.944] rk3588-dvfs: gov temp: soc 33.3 big0 33.3 big1 34.2 little 33.3 center 32.3 gpu 31.4 npu 32.3 C; mean of 74 samples 32.27 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[  90.948] rk3588-dvfs: gov temp: soc 32.3 big0 33.3 big1 33.3 little 32.3 center 32.3 gpu 31.4 npu 31.4 C; mean of 74 samples 32.90 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 100.957] rk3588-dvfs: gov temp: soc 32.3 big0 34.2 big1 33.3 little 33.3 center 31.4 gpu 31.4 npu 31.4 C; mean of 74 samples 32.68 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 110.972] rk3588-dvfs: gov temp: soc 32.3 big0 32.3 big1 32.3 little 32.3 center 31.4 gpu 31.4 npu 31.4 C; mean of 74 samples 32.70 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 120.977] rk3588-dvfs: gov temp: soc 31.4 big0 32.3 big1 32.3 little 32.3 center 31.4 gpu 31.4 npu 31.4 C; mean of 74 samples 32.65 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 130.986] rk3588-dvfs: gov temp: soc 31.4 big0 32.3 big1 32.3 little 32.3 center 31.4 gpu 31.4 npu 31.4 C; mean of 73 samples 32.12 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 140.992] rk3588-dvfs: gov temp: soc 31.4 big0 31.4 big1 31.4 little 31.4 center 30.5 gpu 30.5 npu 30.5 C; mean of 74 samples 31.47 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 151.002] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 30.5 C; mean of 74 samples 30.63 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 161.012] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 30.5 C; mean of 74 samples 30.55 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 171.024] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 30.5 C; mean of 73 samples 30.50 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 181.025] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 29.6 C; mean of 74 samples 30.33 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 191.040] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 30.5 little 30.5 center 30.5 gpu 29.6 npu 29.6 C; mean of 74 samples 30.16 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 201.054] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 29.6 C; mean of 73 samples 30.17 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 211.069] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 30.5 little 30.5 center 29.6 gpu 29.6 npu 30.5 C; mean of 74 samples 30.02 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 221.085] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.88 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 231.100] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 30.5 little 30.5 center 30.5 gpu 29.6 npu 30.5 C; mean of 74 samples 30.15 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 241.114] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 30.5 center 29.6 gpu 30.5 npu 29.6 C; mean of 73 samples 29.97 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 251.129] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.85 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 261.134] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 29.6 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.75 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 271.138] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 73 samples 29.76 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 281.154] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.73 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 291.155] rk3588-dvfs: gov temp: soc 31.4 big0 32.3 big1 32.3 little 31.4 center 31.4 gpu 30.5 npu 30.5 C; mean of 74 samples 30.56 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 301.172] rk3588-dvfs: gov temp: soc 31.4 big0 32.3 big1 32.3 little 31.4 center 30.5 gpu 30.5 npu 30.5 C; mean of 75 samples 31.28 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 311.178] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 29.6 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 76 samples 30.86 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 321.187] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 29.6 little 30.5 center 30.5 gpu 29.6 npu 29.6 C; mean of 75 samples 30.37 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 331.191] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 29.6 C; mean of 76 samples 30.20 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 341.198] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 30.5 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 30.31 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 351.205] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 30.5 center 30.5 gpu 29.6 npu 29.6 C; mean of 75 samples 30.02 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 361.211] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 29.6 little 29.6 center 30.5 gpu 30.5 npu 29.6 C; mean of 76 samples 30.05 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 371.221] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 30.5 little 30.5 center 30.5 gpu 29.6 npu 29.6 C; mean of 75 samples 30.12 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 381.234] rk3588-dvfs: gov temp: soc 29.6 big0 30.5 big1 29.6 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 30.03 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 391.246] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 30.5 little 30.5 center 30.5 gpu 29.6 npu 29.6 C; mean of 76 samples 30.07 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 401.249] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 30.5 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.91 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 411.250] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 76 samples 29.80 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 421.250] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 29.6 C; mean of 75 samples 29.93 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 431.252] rk3588-dvfs: gov temp: soc 31.4 big0 31.4 big1 31.4 little 31.4 center 30.5 gpu 30.5 npu 30.5 C; mean of 75 samples 30.75 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 441.261] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 29.6 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 76 samples 30.43 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 451.262] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 29.6 C; mean of 75 samples 30.14 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 461.273] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 29.6 C; mean of 75 samples 30.53 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 471.284] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 30.5 little 30.5 center 30.5 gpu 29.6 npu 30.5 C; mean of 76 samples 30.06 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 481.298] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 30.5 little 30.5 center 30.5 gpu 29.6 npu 29.6 C; mean of 75 samples 29.88 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 491.312] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 76 samples 29.90 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 501.315] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 29.6 little 30.5 center 29.6 gpu 30.5 npu 29.6 C; mean of 75 samples 29.80 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 511.324] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 76 samples 29.81 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 521.339] rk3588-dvfs: gov temp: soc 29.6 big0 30.5 big1 29.6 little 29.6 center 30.5 gpu 29.6 npu 29.6 C; mean of 75 samples 29.71 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 531.345] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 76 samples 29.69 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 541.351] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.66 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 551.361] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 30.5 center 29.6 gpu 30.5 npu 29.6 C; mean of 76 samples 29.65 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 561.369] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.67 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 571.375] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 76 samples 29.67 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 581.390] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.65 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 591.403] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 76 samples 29.65 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+
+== tg1 (governor): the ten-second temperature lines
+[  40.875] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 30.5 C; mean of 73 samples 30.32 C, highest seen 31.4 C, throttle step 0, 0% of the time throttled
+[  50.889] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 29.6 npu 30.5 C; mean of 74 samples 30.40 C, highest seen 31.4 C, throttle step 0, 0% of the time throttled
+[  60.896] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 29.6 npu 29.6 C; mean of 73 samples 30.53 C, highest seen 31.4 C, throttle step 0, 0% of the time throttled
+[  70.894] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 29.6 npu 29.6 C; mean of 73 samples 30.38 C, highest seen 33.3 C, throttle step 0, 0% of the time throttled
+[  80.896] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 30.5 C; mean of 71 samples 31.05 C, highest seen 34.2 C, throttle step 0, 0% of the time throttled
+[  90.902] rk3588-dvfs: gov temp: soc 32.3 big0 33.3 big1 33.3 little 32.3 center 31.4 gpu 31.4 npu 31.4 C; mean of 72 samples 31.88 C, highest seen 35.1 C, throttle step 0, 0% of the time throttled
+[ 100.912] rk3588-dvfs: gov temp: soc 32.3 big0 33.3 big1 34.2 little 32.3 center 31.4 gpu 31.4 npu 31.4 C; mean of 70 samples 31.42 C, highest seen 35.1 C, throttle step 0, 0% of the time throttled
+[ 110.922] rk3588-dvfs: gov temp: soc 32.3 big0 32.3 big1 32.3 little 32.3 center 31.4 gpu 31.4 npu 31.4 C; mean of 72 samples 32.50 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 120.935] rk3588-dvfs: gov temp: soc 31.4 big0 31.4 big1 31.4 little 31.4 center 30.5 gpu 30.5 npu 30.5 C; mean of 71 samples 31.87 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 130.939] rk3588-dvfs: gov temp: soc 30.5 big0 31.4 big1 31.4 little 31.4 center 30.5 gpu 30.5 npu 30.5 C; mean of 72 samples 31.51 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 140.942] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 30.5 C; mean of 71 samples 31.12 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 150.947] rk3588-dvfs: gov temp: soc 29.6 big0 30.5 big1 30.5 little 29.6 center 30.5 gpu 29.6 npu 29.6 C; mean of 73 samples 30.48 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 160.949] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 29.6 little 30.5 center 30.5 gpu 30.5 npu 29.6 C; mean of 73 samples 30.10 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 170.968] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 30.5 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 73 samples 29.89 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 180.955] rk3588-dvfs: gov temp: soc 29.6 big0 30.5 big1 30.5 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 72 samples 29.70 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 190.985] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 73 samples 29.63 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 200.991] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 73 samples 29.62 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 211.003] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 73 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 221.015] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 73 samples 29.62 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 231.025] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 73 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 241.018] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 30.5 little 30.5 center 29.6 gpu 29.6 npu 29.6 C; mean of 73 samples 29.66 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 251.034] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 72 samples 29.67 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 261.060] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 73 samples 29.62 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 271.060] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 73 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 281.068] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 73 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 291.061] rk3588-dvfs: gov temp: soc 32.3 big0 32.3 big1 32.3 little 32.3 center 31.4 gpu 30.5 npu 30.5 C; mean of 72 samples 30.20 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 301.070] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.93 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 311.068] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.63 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 321.086] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 331.082] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 341.099] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.62 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 351.129] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.60 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 361.125] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 371.127] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.62 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 381.153] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 391.166] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 401.175] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 411.174] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.62 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 421.201] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 431.188] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.67 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 441.215] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.62 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 451.202] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.65 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 461.205] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.65 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 471.230] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 481.223] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.64 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 491.232] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 501.259] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 511.270] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.62 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 521.272] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.62 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 531.279] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 541.290] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.62 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 551.298] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 561.287] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 571.312] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 581.312] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 75 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+[ 591.313] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 74 samples 29.61 C, highest seen 36.0 C, throttle step 0, 0% of the time throttled
+
+== gt33 (limit 33 C): the ten-second temperature lines; "throttle step" is how many points the limit has taken off the top of every cluster
+[  30.847] rk3588-dvfs: governor: 3 domains, floor 0 MHz, boost 1000 ms, window 16 ms, thermal limit 33 C
+[  30.847] rk3588-dvfs: gpu governor: points 200..800 MHz (settings), boost 200 ms, window 25 ms
+[  40.855] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 29.6 npu 29.6 C; mean of 73 samples 30.25 C, highest seen 31.4 C, throttle step 0, 0% of the time throttled
+[  50.868] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 29.6 C; mean of 74 samples 30.64 C, highest seen 31.4 C, throttle step 0, 0% of the time throttled
+[  60.873] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 30.5 C; mean of 74 samples 30.62 C, highest seen 31.4 C, throttle step 0, 0% of the time throttled
+[  70.884] rk3588-dvfs: gov temp: soc 29.6 big0 30.5 big1 30.5 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 72 samples 30.56 C, highest seen 32.3 C, throttle step 0, 0% of the time throttled
+[  80.906] rk3588-dvfs: gov temp: soc 31.4 big0 31.4 big1 31.4 little 31.4 center 30.5 gpu 30.5 npu 30.5 C; mean of 71 samples 30.99 C, highest seen 34.2 C, throttle step 3, 24% of the time throttled
+[  90.906] rk3588-dvfs: gov temp: soc 31.4 big0 31.4 big1 31.4 little 31.4 center 31.4 gpu 30.5 npu 30.5 C; mean of 73 samples 31.40 C, highest seen 34.2 C, throttle step 5, 93% of the time throttled
+[ 100.919] rk3588-dvfs: gov temp: soc 30.5 big0 31.4 big1 31.4 little 31.4 center 30.5 gpu 30.5 npu 30.5 C; mean of 71 samples 31.07 C, highest seen 34.2 C, throttle step 3, 91% of the time throttled
+[ 110.934] rk3588-dvfs: gov temp: soc 31.4 big0 31.4 big1 32.3 little 31.4 center 30.5 gpu 30.5 npu 30.5 C; mean of 73 samples 31.27 C, highest seen 34.2 C, throttle step 4, 92% of the time throttled
+[ 120.941] rk3588-dvfs: gov temp: soc 30.5 big0 31.4 big1 31.4 little 31.4 center 31.4 gpu 30.5 npu 30.5 C; mean of 72 samples 31.15 C, highest seen 34.2 C, throttle step 2, 73% of the time throttled
+[ 130.945] rk3588-dvfs: gov temp: soc 30.5 big0 31.4 big1 31.4 little 31.4 center 30.5 gpu 30.5 npu 30.5 C; mean of 71 samples 31.22 C, highest seen 34.2 C, throttle step 3, 76% of the time throttled
+[ 140.959] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 30.5 C; mean of 72 samples 30.85 C, highest seen 34.2 C, throttle step 0, 12% of the time throttled
+[ 150.954] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 30.5 C; mean of 73 samples 30.41 C, highest seen 34.2 C, throttle step 0, 0% of the time throttled
+[ 160.959] rk3588-dvfs: gov temp: soc 29.6 big0 29.6 big1 29.6 little 29.6 center 29.6 gpu 29.6 npu 29.6 C; mean of 73 samples 30.22 C, highest seen 34.2 C, throttle step 0, 0% of the time throttled
+[ 170.967] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 30.5 C; mean of 73 samples 30.48 C, highest seen 34.2 C, throttle step 0, 15% of the time throttled
+[ 180.977] rk3588-dvfs: gov temp: soc 30.5 big0 29.6 big1 29.6 little 29.6 center 30.5 gpu 30.5 npu 29.6 C; mean of 74 samples 30.28 C, highest seen 34.2 C, throttle step 0, 0% of the time throttled
+[ 190.990] rk3588-dvfs: gov temp: soc 31.4 big0 32.3 big1 31.4 little 31.4 center 31.4 gpu 31.4 npu 30.5 C; mean of 73 samples 30.42 C, highest seen 34.2 C, throttle step 2, 9% of the time throttled
+[ 201.021] rk3588-dvfs: gov temp: soc 30.5 big0 31.4 big1 30.5 little 31.4 center 30.5 gpu 30.5 npu 30.5 C; mean of 73 samples 30.87 C, highest seen 34.2 C, throttle step 0, 27% of the time throttled
+[ 211.035] rk3588-dvfs: gov temp: soc 31.4 big0 31.4 big1 31.4 little 31.4 center 30.5 gpu 30.5 npu 30.5 C; mean of 72 samples 31.09 C, highest seen 34.2 C, throttle step 0, 26% of the time throttled
+[ 221.041] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 30.5 C; mean of 73 samples 31.38 C, highest seen 34.2 C, throttle step 3, 59% of the time throttled
+[ 231.056] rk3588-dvfs: gov temp: soc 30.5 big0 30.5 big1 30.5 little 30.5 center 30.5 gpu 30.5 npu 30.5 C; mean of 73 samples 31.12 C, highest seen 34.2 C, throttle step 0, 52% of the time throttled

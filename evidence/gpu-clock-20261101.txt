@@ -1,0 +1,60 @@
+## The GPU clock on the EVB10: what the clock service does to it, what it really runs at against the voltage, and the GPU's busy share (runs gs1, gv1, gw1; serial logs of the kernel)
+# gs1: cd uefi-evb10 && EXTRA_KERNEL_ARGS="rk3588-dvfs=8" CAPTURE_SECS=110 EARLY_STOP=0 tools/xnu-probe/run-kernel.sh gs1   (the rail raised to 850 mV, each rate of the clock service in turn, then back)
+# gv1: EXTRA_KERNEL_ARGS="rk3588-dvfs=10": for each setting the rail walks down from 850 mV in 12.5 mV steps to 675 mV
+# gw1: EXTRA_KERNEL_ARGS="rk3588-dvfs=9 evb10-touch-demo=120 mali-timeline=1" CAPTURE_SECS=235: GPU_STATUS and SHADER_READY sampled every ~7 us for 50 ms windows
+# "measured" is the GPU's cycle counter (GPU_COMMAND 0x103 starts it) against the architected counter over 5 ms, as the Mali driver's own clock probe does. sel158 is CLKSEL_CON(158): bits 7:5 the
+# source (0 GPLL, 1 CPLL), bits 4:0 the divider minus one, and bit 14 (0x4000), which the clock service sets for the settings 300 to 900 MHz: the GPU then runs from its PVTPLL.
+# At start the Mali driver's setting is CPLL / 2 = 750 MHz at 750 mV (the firmware's rail voltage). The service ignores 1000 MHz (it reads 750 MHz afterwards). 800 and 900 are one ring (same numbers).
+
+== gs1: the clock service's rates with the rail at 850 mV (the glued lines of the serial log are split)
+rk3588-dvfs: gpu start: service 750 MHz (0); sel158 00001f21 (source 1, divider 2) sel159 00000000 gate66 00000004; gpll 1188 cpll 1500 aupll 786 npll 850 v0pll 1188 MHz; rail 750 mV (0); measured 750 750 MHz; status 00000000 shaders 00000000
+rk3588-dvfs: gpu set 1000 (0, 3 us): service 750 MHz (0); sel158 00001f21 (source 1, divider 2) sel159 00000000 gate66 00000004; gpll 1188 cpll 1500 aupll 786 npll 850 v0pll 1188 MHz; rail 850 mV (0); measured 749 750 MHz; status 00000000 shaders 00000000
+rk3588-dvfs: gpu set 900 (0, 2 us): service 900 MHz (0); sel158 00005f21 (source 1, divider 2) sel159 00000000 gate66 00000004; gpll 1188 cpll 1500 aupll 786 npll 850 v0pll 1188 MHz; rail 850 mV (0); measured 1053 1053 MHz; status 00000000 shaders 0000000rk3588-dvfs: gpu set 800 (0, 2 us): service 800 MHz (0); sel158 00005f21 (source 1, divider 2) sel159 00000000 gate66 00000004; gpll 1188 cpll 1500 aupll 786 npll 850 v0pll 1188 MHz; rail 850 mV (0); measured 1053 1053 MHz; status 00000000 shaders 0000000rk3588-dvfs: gpu set 700 (0, 2 us): service 700 MHz (0); sel158 00005f21 (source 1, divider 2) sel159 00000000 gate66 00000004; gpll 1188 cpll 1500 aupll 786 npll 850 v0pll 1188 MHz; rail 850 mV (0); measured 1026 1026 MHz; status 00000000 shaders 0000000e
+rk3588-dvfs: gpu set 600 (0, 2 us): service 600 MHz (0); sel158 00005f21 (source 1, divider 2) sel159 00000000 gate66 00000004; gpll 1188 cpll 1500 aupll 786 npll 850 v0pll 1188 MHz; rail 850 mV (0); measured 930 930 MHz; status 00000000 shaders 00000000
+rk3588-dvfs: gpu set 500 (0, 2 us): service 500 MHz (0); sel158 00005f21 (source 1, divider 2) sel159 00000000 gate66 00000004; gpll 1188 cpll 1500 aupll 786 npll 850 v0pll 1188 MHz; rail 850 mV (0); measured 783 783 MHz; status 00000000 shaders 00000000
+rk3588-dvfs: gpu set 400 (0, 2 us): service 400 MHz (0); sel158 00005f21 (source 1, divider 2) sel159 00000000 gate66 00000004; gpll 1188 cpll 1500 aupll 786 npll 850 v0pll 1188 MHz; rail 850 mV (0); measured 620 620 MHz; status 00000000 shaders 00000000
+rk3588-dvfs: gpu set 300 (0, 2 us): service 300 MHz (0); sel158 00005f21 (source 1, divider 2) sel159 00000000 gate66 00000004; gpll 1188 cpll 1500 aupll 786 npll 850 v0pll 1188 MHz; rail 850 mV (0); measured 486 486 MHz; status 00000000 shaders 00000000
+rk3588-dvfs: gpu set 200 (0, 2 us): service 200 MHz (0); sel158 00001f05 (source 0, divider 6) sel159 00000000 gate66 00000004; gpll 1188 cpll 1500 aupll 786 npll 850 v0pll 1188 MHz; rail 850 mV (0); measured 197 197 MHz; status 00000000 shaders 00000000
+rk3588-dvfs: gpu restored: service 750 MHz (0); sel158 00001f21 (source 1, divider 2) sel159 00000000 gate66 00000004; gpll 1188 cpll 1500 aupll 786 npll 850 v0pll 1188 MHz; rail 850 mV (0); measured 749 749 MHz; status 00000000 shaders 00000000
+rk3588-dvfs: gpu end: service 750 MHz (0); sel158 00001f21 (source 1, divider 2) sel159 00000000 gate66 00000004; gpll 1188 cpll 1500 aupll 786 npll 850 v0pll 1188 MHz; rail 750 mV (0); measured 749 750 MHz; status 00000000 shaders 00000000
+[  30.901] rk3588-dvfs: gpu sweep: rail 750 -> 850 mV: 0
+[  31.026] rk3588-dvfs: gpu sweep: rail back to 750 mV: 0
+
+== gv1: measured MHz against the rail voltage (mV:MHz), per setting of the clock service
+[  30.834] rk3588-dvfs: gpu start: service 750 MHz (0); sel158 00001f21 (source 1, divider 2) sel159 00000000 gate66 00000004; rail 750 mV (0); measured 749 750 MHz; status 00000000 shaders 00000000
+[  30.950] rk3588-dvfs: gpu vsweep: setting 900 MHz, mV:measured MHz 850.0:1053 837.5:1030 825.0:1006 812.5:982 800.0:957 787.5:931 775.0:905 762.5:879 750.0:852 737.5:824 725.0:796 712.5:768 700.0:739 687.5:709 675.0:679
+[  31.035] rk3588-dvfs: gpu vsweep: setting 800 MHz, mV:measured MHz 850.0:1053 837.5:1030 825.0:1006 812.5:982 800.0:957 787.5:931 775.0:905 762.5:879 750.0:852 737.5:824 725.0:796 712.5:768 700.0:739 687.5:709 675.0:679
+[  31.128] rk3588-dvfs: gpu vsweep: setting 700 MHz, mV:measured MHz 850.0:1026 837.5:1003 825.0:979 812.5:956 800.0:931 787.5:906 775.0:881 762.5:856 750.0:829 737.5:802 725.0:775 712.5:748 700.0:719 687.5:690 675.0:661
+[  31.221] rk3588-dvfs: gpu vsweep: setting 600 MHz, mV:measured MHz 850.0:930 837.5:909 825.0:888 812.5:866 800.0:844 787.5:821 775.0:798 762.5:775 750.0:751 737.5:727 725.0:702 712.5:677 700.0:651 687.5:624 675.0:598
+[  31.314] rk3588-dvfs: gpu vsweep: setting 500 MHz, mV:measured MHz 850.0:783 837.5:765 825.0:747 812.5:729 800.0:710 787.5:691 775.0:672 762.5:652 750.0:632 737.5:611 725.0:590 712.5:569 700.0:547 687.5:524 675.0:502
+[  31.406] rk3588-dvfs: gpu vsweep: setting 400 MHz, mV:measured MHz 850.0:620 837.5:606 825.0:592 812.5:577 800.0:562 787.5:547 775.0:531 762.5:515 750.0:499 737.5:483 725.0:466 712.5:449 700.0:432 687.5:414 675.0:396
+[  31.512] rk3588-dvfs: gpu vsweep: setting 300 MHz, mV:measured MHz 850.0:486 837.5:475 825.0:464 812.5:453 800.0:441 787.5:429 775.0:417 762.5:404 750.0:392 737.5:378 725.0:365 712.5:352 700.0:338 687.5:324 675.0:310
+[  31.513] rk3588-dvfs: gpu end: service 300 MHz (0); sel158 00005f21 (source 1, divider 2) sel159 00000000 gate66 00000004; rail 750 mV (0); measured 392 391 MHz; status 00000000 shaders 00000000
+
+== gw1: the GPU's busy share while the scripted swipes run (50 ms windows; a line is printed when the GPU was busy or its shaders powered, and every 2 s otherwise)
+[  32.881] rk3588-dvfs: gpu watch: 7409 samples: busy 0% power 0% shaders on 0% (status bits 0)
+[  34.882] rk3588-dvfs: gpu watch: 7414 samples: busy 0% power 0% shaders on 0% (status bits 0)
+[  36.883] rk3588-dvfs: gpu watch: 7404 samples: busy 0% power 0% shaders on 0% (status bits 0)
+   ... a swipe starts:
+[ 190.169] rk3588-dvfs: gpu watch: 6211 samples: busy 11% power 0% shaders on 18% (status bits 1)
+[ 190.234] rk3588-dvfs: gpu watch: 6981 samples: busy 60% power 0% shaders on 100% (status bits 1)
+[ 190.286] rk3588-dvfs: gpu watch: 7136 samples: busy 58% power 0% shaders on 100% (status bits 1)
+[ 190.336] rk3588-dvfs: gpu watch: 7113 samples: busy 63% power 0% shaders on 100% (status bits 1)
+[ 190.386] rk3588-dvfs: gpu watch: 7135 samples: busy 52% power 0% shaders on 100% (status bits 1)
+[ 190.437] rk3588-dvfs: gpu watch: 6995 samples: busy 57% power 0% shaders on 100% (status bits 1)
+[ 190.488] rk3588-dvfs: gpu watch: 6927 samples: busy 45% power 0% shaders on 100% (status bits 1)
+[ 190.539] rk3588-dvfs: gpu watch: 5390 samples: busy 71% power 0% shaders on 100% (status bits 1)
+[ 190.589] rk3588-dvfs: gpu watch: 5175 samples: busy 53% power 0% shaders on 100% (status bits 1)
+[ 190.640] rk3588-dvfs: gpu watch: 7014 samples: busy 65% power 0% shaders on 100% (status bits 1)
+[ 190.691] rk3588-dvfs: gpu watch: 7129 samples: busy 61% power 0% shaders on 100% (status bits 1)
+[ 190.741] rk3588-dvfs: gpu watch: 5486 samples: busy 67% power 0% shaders on 100% (status bits 1)
+[ 190.792] rk3588-dvfs: gpu watch: 4914 samples: busy 62% power 0% shaders on 100% (status bits 1)
+[ 190.843] rk3588-dvfs: gpu watch: 7077 samples: busy 71% power 0% shaders on 100% (status bits 1)
+[ 190.894] rk3588-dvfs: gpu watch: 7246 samples: busy 71% power 0% shaders on 100% (status bits 1)
+[ 190.944] rk3588-dvfs: gpu watch: 7229 samples: busy 72% power 0% shaders on 100% (status bits 1)
+[ 191.006] rk3588-dvfs: gpu watch: 6643 samples: busy 72% power 0% shaders on 100% (status bits 1)
+[ 191.046] rk3588-dvfs: gpu watch: 7104 samples: busy 70% power 0% shaders on 100% (status bits 1)
+[ 191.096] rk3588-dvfs: gpu watch: 7029 samples: busy 66% power 0% shaders on 100% (status bits 1)
+[ 191.147] rk3588-dvfs: gpu watch: 7003 samples: busy 84% power 0% shaders on 100% (status bits 1)
+[ 191.198] rk3588-dvfs: gpu watch: 7123 samples: busy 72% power 0% shaders on 100% (status bits 1)
+   windows printed 422; with the GPU busy at all 321; busy 1-29 % 56, 30-59 % 158, 60 % and over 107; the shaders stayed powered through the busy windows and went off about 10 ms after the last work

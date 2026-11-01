@@ -1,0 +1,93 @@
+## GPU frequency and voltage governor, touch boost and the final 600 s run on the EVB10 (runs gg1, gm900, gb300, gb0, gf1; serial logs of the kernel)
+# gg1:   cd uefi-evb10 && EXTRA_KERNEL_ARGS="evb10-touch-demo=120 mali-timeline=1" CAPTURE_SECS=235 EARLY_STOP=0 tools/xnu-probe/run-kernel.sh gg1   (the committed arguments: rk3588-dvfs=6 runs the CPU and the GPU governor;
+#        the touch boost default of that kernel was 1000 ms)
+# gb300: the same with rk3588-dvfs-boost-ms=300;  gb0: rk3588-dvfs-boost-ms=0;  gm900: rk3588-gpu-max=900 (the GPU may use the 900 MHz setting, 957 MHz measured at 800 mV)
+# gf1:   the final code (boost default 300 ms), CAPTURE_SECS=600, EXTRA_KERNEL_ARGS="evb10-touch-demo=120 mali-timeline=1"
+# Frame rates are those of `python3 tools/xnu-probe/frame_phases.py TAG` (finger down 0.8 s per scripted swipe). Before the GPU governor the same swipes (gestures 3 to 11) gave 52.8 frames per second with
+# the GPU at the Mali driver's fixed 750 MHz (base1) and a median command buffer of 9.8 ms. The GPU governor takes the 800 setting (852 MHz measured at 750 mV, the voltage the firmware left) as its top, so
+# the command buffer is shorter (8.7 ms) at the same voltage. "model" figures: the dynamic power of the busy cores / GPU from the vendor device tree's dynamic-power-coefficient (P = C f V^2), against the
+# same work at the top points (CPU) or at the Mali driver's 750 MHz / 750 mV (GPU); the board has no power meter and the idle power of the GPU (clock tree, leakage) is not in the model.
+
+== gf1: final code, 600 s
+  mean over 61 moving gestures: 53.2 fps while the finger is down; median CB gpu 8.7 ms
+  gestures 3-11 (9): 52.8 fps, 5 gaps > 25 ms, 57.5 fps best, median CB gpu 8.8 ms
+   gf1 cpu model mW now 271 / top 310 (13% less) over 48 lines; mean MHz {'cpul': 557, 'cpub01': 1352, 'cpub23': 1154} boosts 64 | gpu mean MHz 327 busy 8.5%
+[ 151.058] rk3588-dvfs: gov gpu: 2 changes, mean 268 MHz, busy 0%, 675 mV; 200:89% 800:10%; boosts 1
+[ 151.058] rk3588-dvfs: gov gpu power: model dynamic power 0 mW, the same work at the boot setting (750 MHz, 750 mV) 0 mW (0% less)
+[ 161.059] rk3588-dvfs: gov gpu: 2 changes, mean 267 MHz, busy 0%, 675 mV; 200:89% 800:10%; boosts 2
+[ 161.059] rk3588-dvfs: gov gpu power: model dynamic power 0 mW, the same work at the boot setting (750 MHz, 750 mV) 0 mW (0% less)
+[ 171.079] rk3588-dvfs: gov gpu: 10 changes, mean 415 MHz, busy 10%, 675 mV; 200:65% 300:1% 800:33%; boosts 4
+[ 171.079] rk3588-dvfs: gov gpu power: model dynamic power 148 mW, the same work at the boot setting (750 MHz, 750 mV) 149 mW (1% less)
+[ 181.102] rk3588-dvfs: gov gpu: 2 changes, mean 294 MHz, busy 6%, 675 mV; 200:85% 800:14%; boosts 5
+[ 181.102] rk3588-dvfs: gov gpu power: model dynamic power 93 mW, the same work at the boot setting (750 MHz, 750 mV) 93 mW (0% less)
+[ 191.115] rk3588-dvfs: gov gpu: 4 changes, mean 372 MHz, busy 12%, 750 mV; 200:72% 800:26%; boosts 7
+[ 191.115] rk3588-dvfs: gov gpu power: model dynamic power 175 mW, the same work at the boot setting (750 MHz, 750 mV) 175 mW (1% less)
+[ 201.120] rk3588-dvfs: gov gpu: 3 changes, mean 316 MHz, busy 8%, 675 mV; 200:81% 800:18%; boosts 8
+[ 201.120] rk3588-dvfs: gov gpu power: model dynamic power 121 mW, the same work at the boot setting (750 MHz, 750 mV) 121 mW (1% less)
+[ 211.131] rk3588-dvfs: gov gpu: 3 changes, mean 306 MHz, busy 7%, 750 mV; 200:83% 800:16%; boosts 10
+[ 211.131] rk3588-dvfs: gov gpu power: model dynamic power 104 mW, the same work at the boot setting (750 MHz, 750 mV) 104 mW (0% less)
+[ 221.136] rk3588-dvfs: gov gpu: 4 changes, mean 379 MHz, busy 13%, 675 mV; 200:71% 800:27%; boosts 11
+[ 221.136] rk3588-dvfs: gov gpu power: model dynamic power 190 mW, the same work at the boot setting (750 MHz, 750 mV) 190 mW (1% less)
+[ 231.146] rk3588-dvfs: gov gpu: 6 changes, mean 301 MHz, busy 7%, 675 mV; 200:83% 800:15%; boosts 12
+[ 231.146] rk3588-dvfs: gov gpu power: model dynamic power 98 mW, the same work at the boot setting (750 MHz, 750 mV) 99 mW (1% less)
+[ 241.154] rk3588-dvfs: gov gpu: 4 changes, mean 392 MHz, busy 13%, 675 mV; 200:70% 800:29%; boosts 14
+[ 241.154] rk3588-dvfs: gov gpu power: model dynamic power 191 mW, the same work at the boot setting (750 MHz, 750 mV) 191 mW (1% less)
+[ 251.174] rk3588-dvfs: gov gpu: 2 changes, mean 294 MHz, busy 7%, 675 mV; 200:85% 800:14%; boosts 15
+[ 251.174] rk3588-dvfs: gov gpu power: model dynamic power 102 mW, the same work at the boot setting (750 MHz, 750 mV) 102 mW (0% less)
+[  30.866] rk3588-dvfs: governor: 3 domains, floor 0 MHz, boost 300 ms, window 16 ms, thermal limit 85 C
+[  30.866] rk3588-dvfs: gpu governor: points 200..800 MHz (settings), boost 200 ms, window 25 ms
+
+== gg1: governors with a 1000 ms touch boost
+  mean over 12 moving gestures: 50.2 fps while the finger is down; median CB gpu 8.7 ms
+  gestures 3-11 (9): 53.8 fps, 4 gaps > 25 ms, 58.8 fps best, median CB gpu 8.7 ms
+   gg1 cpu model mW now 349 / top 398 (12% less) over 12 lines; mean MHz {'cpul': 623, 'cpub01': 1494, 'cpub23': 1313} boosts 12 | gpu mean MHz 292 busy 5.4%
+[ 151.043] rk3588-dvfs: gov gpu: 2 changes, mean 266 MHz, busy 0%, 675 mV; 200:89% 800:10%; boosts 1
+[ 151.043] rk3588-dvfs: gov gpu power: model dynamic power 4 mW, the same work at the boot setting (750 MHz, 750 mV) 4 mW (0% less)
+[ 161.058] rk3588-dvfs: gov gpu: 2 changes, mean 267 MHz, busy 0%, 675 mV; 200:89% 800:10%; boosts 2
+[ 161.058] rk3588-dvfs: gov gpu power: model dynamic power 0 mW, the same work at the boot setting (750 MHz, 750 mV) 0 mW (0% less)
+[ 171.078] rk3588-dvfs: gov gpu: 7 changes, mean 396 MHz, busy 12%, 675 mV; 200:69% 800:30%; boosts 4
+[ 171.078] rk3588-dvfs: gov gpu power: model dynamic power 181 mW, the same work at the boot setting (750 MHz, 750 mV) 181 mW (1% less)
+[ 181.103] rk3588-dvfs: gov gpu: 2 changes, mean 294 MHz, busy 6%, 675 mV; 200:85% 800:14%; boosts 5
+[ 181.103] rk3588-dvfs: gov gpu power: model dynamic power 96 mW, the same work at the boot setting (750 MHz, 750 mV) 96 mW (0% less)
+[ 191.114] rk3588-dvfs: gov gpu: 3 changes, mean 368 MHz, busy 12%, 750 mV; 200:73% 800:26%; boosts 7
+[ 191.114] rk3588-dvfs: gov gpu power: model dynamic power 171 mW, the same work at the boot setting (750 MHz, 750 mV) 171 mW (1% less)
+[ 201.130] rk3588-dvfs: gov gpu: 3 changes, mean 314 MHz, busy 8%, 675 mV; 200:82% 800:17%; boosts 8
+[ 201.130] rk3588-dvfs: gov gpu power: model dynamic power 122 mW, the same work at the boot setting (750 MHz, 750 mV) 122 mW (1% less)
+[ 211.151] rk3588-dvfs: gov gpu: 3 changes, mean 305 MHz, busy 7%, 750 mV; 200:83% 800:16%; boosts 10
+[ 211.151] rk3588-dvfs: gov gpu power: model dynamic power 113 mW, the same work at the boot setting (750 MHz, 750 mV) 113 mW (0% less)
+[ 221.176] rk3588-dvfs: gov gpu: 3 changes, mean 378 MHz, busy 12%, 675 mV; 200:72% 800:27%; boosts 11
+[ 221.176] rk3588-dvfs: gov gpu power: model dynamic power 183 mW, the same work at the boot setting (750 MHz, 750 mV) 183 mW (1% less)
+[ 231.192] rk3588-dvfs: gov gpu: 8 changes, mean 305 MHz, busy 7%, 675 mV; 200:82% 300:1% 800:16%; boosts 12
+[ 231.192] rk3588-dvfs: gov gpu power: model dynamic power 104 mW, the same work at the boot setting (750 MHz, 750 mV) 104 mW (1% less)
+
+== gb300: touch boost 300 ms
+  mean over 12 moving gestures: 49.2 fps while the finger is down; median CB gpu 8.7 ms
+  gestures 3-11 (9): 53.3 fps, 6 gaps > 25 ms, 58.8 fps best, median CB gpu 8.7 ms
+   gb300 cpu model mW now 328 / top 385 (15% less) over 12 lines; mean MHz {'cpul': 592, 'cpub01': 1429, 'cpub23': 1218} boosts 12 | gpu mean MHz 292 busy 5.2%
+
+== gb0: no touch boost
+  mean over 12 moving gestures: 46.4 fps while the finger is down; median CB gpu 8.8 ms
+  gestures 3-11 (9): 51.1 fps, 16 gaps > 25 ms, 57.5 fps best, median CB gpu 8.8 ms
+   gb0 cpu model mW now 272 / top 352 (23% less) over 12 lines; mean MHz {'cpul': 598, 'cpub01': 1287, 'cpub23': 1119} boosts 0 | gpu mean MHz 293 busy 5.3%
+
+== gm900: GPU ceiling 900
+  mean over 12 moving gestures: 48.4 fps while the finger is down; median CB gpu 7.8 ms
+  gestures 3-11 (9): 53.3 fps, 5 gaps > 25 ms, 60.0 fps best, median CB gpu 7.8 ms
+   gm900 cpu model mW now 317 / top 367 (14% less) over 12 lines; mean MHz {'cpul': 579, 'cpub01': 1465, 'cpub23': 1316} boosts 12 | gpu mean MHz 305 busy 4.8%
+
+== gg1: every scripted swipe
+gg1: per gesture, finger down (0.8 s): fps, mean gap ms, gaps > 25 ms; GPU busy %, CBs, median CB gpu ms; settle: frames
+  g 0 swipe up      38.8 fps  gap  16.7 ms  slow  0   GPU   3.7%  CBs  31 med   0.7 ms   settle   1 frames
+  g 2 swipe right   30.0 fps  gap  18.8 ms  slow  2   GPU  21.8%  CBs  20 med   9.0 ms   settle  34 frames
+  g 3 swipe left    55.0 fps  gap  17.0 ms  slow  1   GPU  45.0%  CBs  39 med   8.8 ms   settle  47 frames
+  g 4 swipe right   50.0 fps  gap  17.1 ms  slow  1   GPU  40.3%  CBs  38 med   8.6 ms   settle  32 frames
+  g 5 swipe left    56.2 fps  gap  17.1 ms  slow  1   GPU  45.5%  CBs  39 med   8.8 ms   settle  46 frames
+  g 6 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  40.8%  CBs  38 med   8.7 ms   settle  35 frames
+  g 7 swipe left    57.5 fps  gap  16.6 ms  slow  0   GPU  46.3%  CBs  41 med   8.7 ms   settle  46 frames
+  g 8 swipe right   48.8 fps  gap  16.6 ms  slow  0   GPU  40.0%  CBs  37 med   8.7 ms   settle  35 frames
+  g 9 swipe left    57.5 fps  gap  17.0 ms  slow  1   GPU  45.9%  CBs  40 med   8.7 ms   settle  45 frames
+  g10 swipe right   50.0 fps  gap  16.7 ms  slow  0   GPU  39.5%  CBs  37 med   8.8 ms   settle  33 frames
+  g11 swipe left    58.8 fps  gap  16.6 ms  slow  0   GPU  44.8%  CBs  39 med   8.7 ms   settle  46 frames
+  g12 swipe right   50.0 fps  gap  16.6 ms  slow  0   GPU  39.9%  CBs  37 med   8.7 ms   settle  33 frames
+  mean over 12 moving gestures: 50.2 fps while the finger is down; median CB gpu 8.7 ms
+  gestures 3-11 (9): 53.8 fps, 4 gaps > 25 ms, 58.8 fps best, median CB gpu 8.7 ms

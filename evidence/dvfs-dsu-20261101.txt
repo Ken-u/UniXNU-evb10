@@ -16,3 +16,15 @@
 [  34.991] rk3588-dvfs: dsu: cortex-a55 600 MHz, dsu 594 MHz: cpu0 load from the l3 37.8 ns, from memory 156.7 ns
 [  35.896] rk3588-dvfs: dsu: cortex-a55 408 MHz, dsu 396 MHz: cpu0 load from the l3 51.9 ns, from memory 180.8 ns
 [  35.959] rk3588-dvfs: dsu: set 1800 MHz with the cortex-a55 cores at 408 MHz: 0, reads 1800 MHz (0): cpu0 load from the l3 23.3 ns
+
+== gd6: the same probe, fixed (UniXNU-rk3588-common d593e9b; the `chain:` lines above are the debugging trace of the kernel of dvfs7, which kept the loop alive; the trace is gone and the
+== loop is kept by a volatile sink, after a kernel without the trace measured 0 ns because the compiler had removed the loop; command: EXTRA_KERNEL_ARGS="rk3588-dvfs=5" tools/xnu-probe/run-kernel.sh gd6)
+[  31.214] rk3588-dvfs: dsu: cortex-a55 1800 MHz, dsu 1800 MHz: cpu0 load from the l3 18.0 ns, from memory 120.5 ns
+[  31.475] rk3588-dvfs: dsu: cortex-a55 1608 MHz, dsu 1608 MHz: cpu0 load from the l3 19.2 ns, from memory 122.2 ns
+[  31.745] rk3588-dvfs: dsu: cortex-a55 1416 MHz, dsu 1416 MHz: cpu0 load from the l3 21.0 ns, from memory 124.8 ns
+[  32.028] rk3588-dvfs: dsu: cortex-a55 1200 MHz, dsu 1200 MHz: cpu0 load from the l3 22.7 ns, from memory 128.2 ns
+[  32.331] rk3588-dvfs: dsu: cortex-a55 1008 MHz, dsu 1008 MHz: cpu0 load from the l3 26.4 ns, from memory 134.3 ns
+[  32.659] rk3588-dvfs: dsu: cortex-a55 816 MHz, dsu 816 MHz: cpu0 load from the l3 30.1 ns, from memory 142.6 ns
+[  33.031] rk3588-dvfs: dsu: cortex-a55 600 MHz, dsu 594 MHz: cpu0 load from the l3 37.8 ns, from memory 156.6 ns
+[  33.491] rk3588-dvfs: dsu: cortex-a55 408 MHz, dsu 396 MHz: cpu0 load from the l3 51.7 ns, from memory 180.7 ns
+[  33.572] rk3588-dvfs: dsu: set 1800 MHz with the cortex-a55 cores at 408 MHz: 0, reads 1800 MHz (0): cpu0 load from the l3 23.1 ns
